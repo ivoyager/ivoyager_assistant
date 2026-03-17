@@ -49,6 +49,7 @@ var _camera_handler: IVCameraHandler
 
 
 func _ready() -> void:
+	process_mode = PROCESS_MODE_ALWAYS
 	var config := IVAssistantPluginUtils.get_ivoyager_config(
 			"res://addons/ivoyager_assistant/ivoyager_assistant.cfg")
 	var enabled: bool = config.get_value("assistant", "enabled", true)
