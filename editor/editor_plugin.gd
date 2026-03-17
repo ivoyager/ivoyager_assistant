@@ -20,16 +20,19 @@
 @tool
 extends EditorPlugin
 
-# This file delays plugin init until ivoyager_core plugin is enabled.
+# This file registers autoloads for the assistant plugin. If you modify
+# autoloads in ivoyager_assistant.cfg or ivoyager_override.cfg, you'll need to
+# disable and re-enable the plugin for changes to take effect.
 
 const REQUIRED_PLUGINS: Array[String] = ["ivoyager_core"]
 
 var _config: ConfigFile # with overrides
+var _autoloads: Dictionary[String, String] = {}
 
 
 
 func _enter_tree() -> void:
-	
+
 	# Wait for required plugins...
 	await get_tree().process_frame
 	var wait_counter := 0
@@ -40,15 +43,17 @@ func _enter_tree() -> void:
 			push_error("After enabling plugins above, you MUST disable & re-enable ivoyager_assistant!")
 			return
 		await get_tree().process_frame
-	
+
 	IVAssistantPluginUtils.print_plugin_name_and_version(
 			"ivoyager_assistant", " - https://ivoyager.dev")
 	_config = IVAssistantPluginUtils.get_ivoyager_config(
 			"res://addons/ivoyager_assistant/ivoyager_assistant.cfg")
+	_add_autoloads()
 
 
 func _exit_tree() -> void:
 	print("Removing I, Voyager - Assistant (plugin)")
+	_remove_autoloads()
 	_config = null
 
 
@@ -57,3 +62,21 @@ func _is_required_plugins_enabled() -> bool:
 		if !EditorInterface.is_plugin_enabled(plugin):
 			return false
 	return true
+
+
+func _add_autoloads() -> void:
+	for autoload_name in _config.get_section_keys("assistant_autoload"):
+		var value: Variant = _config.get_value("assistant_autoload", autoload_name)
+		if value: # could be null or "" to negate
+			assert(typeof(value) == TYPE_STRING,
+					"'%s' must specify a path as String" % autoload_name)
+			_autoloads[autoload_name] = value
+	for autoload_name in _autoloads:
+		var path := _autoloads[autoload_name]
+		add_autoload_singleton(autoload_name, path)
+
+
+func _remove_autoloads() -> void:
+	for autoload_name: String in _autoloads:
+		remove_autoload_singleton(autoload_name)
+	_autoloads.clear()

@@ -44,7 +44,7 @@ read -r -t 5 RESPONSE <&3 || true
 exec 3<&-
 
 if [ -z "${RESPONSE:-}" ]; then
-    echo "Error: no response from $HOST:$PORT (is the Planetarium running?)" >&2
+    echo "Error: no response from $HOST:$PORT (is the application running?)" >&2
     exit 1
 fi
 
