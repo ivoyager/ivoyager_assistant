@@ -11,22 +11,19 @@ The Assistant plugin provides a programmatic interface to the I, Voyager simulat
 
 ### 2.1 Integration with Core
 
-The plugin integrates via the standard I, Voyager plugin pattern:
+The plugin integrates via the Godot EditorPlugin system:
 
-- **Preinitializer** — A RefCounted registered in `ivoyager_override.cfg` under `[core_initializer] preinitializers/`. Runs during `IVCoreInitializer` init sequence. Registers the AssistantServer as a program node.
-- **AssistantServer** — A Node added as a program node under Universe. Starts a TCP server on `core_initialized`, caches program references on `simulator_started`. Processes commands in `_process()` on the main thread.
+- **EditorPlugin** — Registers `IVAssistantServer` as an autoload via `add_autoload_singleton()` when the plugin is enabled, and removes it when disabled.
+- **IVAssistantServer** — An autoload Node (root-level singleton). Reads config in `_ready()`, starts a TCP server on `core_initialized`, caches program references on `simulator_started`. Processes commands in `_process()` on the main thread.
 
 ### 2.2 Component Diagram
 
 ```
-ivoyager_override.cfg
-  └─ registers AssistantPreinitializer
+EditorPlugin (editor/editor_plugin.gd)
+  └─ _enter_tree(): reads ivoyager_assistant.cfg, calls add_autoload_singleton()
 
-AssistantPreinitializer (RefCounted)
-  └─ _init(): adds AssistantServer to IVCoreInitializer.program_nodes
-
-AssistantServer (Node, child of Universe)
-  ├─ _ready(): connects to core_initialized, simulator_started, about_to_quit
+IVAssistantServer (autoload Node, root-level singleton)
+  ├─ _ready(): reads config, checks enabled/debug_only, connects signals
   ├─ on core_initialized: starts TCPServer on localhost:29071 (limited API)
   ├─ on simulator_started: caches program references, enables full API
   └─ _process(): polls TCP, reads JSON commands, dispatches, writes JSON responses
@@ -38,15 +35,14 @@ AssistantServer (Node, child of Universe)
 
 ### 2.3 Lifecycle
 
-1. Core initializer instantiates `AssistantPreinitializer` (early in init sequence)
-2. Preinitializer reads config, registers `AssistantServer` in `IVCoreInitializer.program_nodes`
-3. Core initializer adds AssistantServer as a child of Universe; `_ready()` connects signals
-4. On `core_initialized`: TCP server starts listening. Only `get_project_info`, `get_state`, `start_game`, and `quit` are available
-5. On `simulator_started`: program references cached (SelectionManager, SpeedManager, etc.). All API methods become available
-6. On `about_to_free_procedural_nodes`: cached references cleared, sim-dependent methods return errors
-7. On `about_to_quit`: TCP server shuts down
+1. EditorPlugin registers `IVAssistantServer` as an autoload when the plugin is enabled
+2. On game start, `IVAssistantServer._ready()` reads config, checks `enabled`/`debug_only`, connects to `IVStateManager` signals
+3. On `core_initialized`: TCP server starts listening. Only `get_project_info`, `get_state`, `start_game`, and `quit` are available
+4. On `simulator_started`: program references cached (SelectionManager, SpeedManager, etc.). All API methods become available
+5. On `about_to_free_procedural_nodes`: cached references cleared, sim-dependent methods return errors
+6. On `about_to_quit`: TCP server shuts down
 
-For projects with `wait_for_start = true` (splash screens), there is a gap between steps 4 and 5 during which the client can connect, query project info, and call `start_game` to bypass the splash screen.
+For projects with `wait_for_start = true` (splash screens), there is a gap between steps 3 and 4 during which the client can connect, query project info, and call `start_game` to bypass the splash screen.
 
 ### 2.4 Security
 
@@ -393,9 +389,12 @@ The AssistantServer reads from and writes to these core objects:
 
 ## 7. Configuration
 
-`ivoyager_assistant.cfg` `[assistant]` section:
+`ivoyager_assistant.cfg`:
 
 ```ini
+[assistant_autoload]
+IVAssistantServer="../assistant_server.gd"
+
 [assistant]
 port=29071
 enabled=true
@@ -404,17 +403,25 @@ assistant_name=""
 context_file=""
 ```
 
+### 7.1 Autoload Registration
+
+The `[assistant_autoload]` section declares autoloads managed by the EditorPlugin. When the plugin is enabled in Godot's Plugin manager, `IVAssistantServer` is registered as an autoload. Projects can negate the autoload by setting `IVAssistantServer=""` in `ivoyager_override.cfg`.
+
+### 7.2 Runtime Settings
+
+The `[assistant]` section controls runtime behavior:
+
 - `port` — TCP listen port (default: 29071)
-- `enabled` — Master enable/disable (default: true)
+- `enabled` — Master enable/disable (default: true). When false, the autoload node exists but does not start the TCP server.
 - `debug_only` — If true, server only starts when `OS.is_debug_build()` is true (default: true)
 - `assistant_name` — Display name for the assistant persona (default: empty, uses project name from ProjectSettings)
 - `context_file` — Path to a text file (`res://` relative) with project-specific context for AI clients (default: empty)
 
-Base values in `ivoyager_assistant.cfg` can be overridden per-project via `ivoyager_override.cfg` or `ivoyager_override2.cfg` under the same `[assistant]` section.
+Base values in `ivoyager_assistant.cfg` can be overridden per-project via `ivoyager_override.cfg` or `ivoyager_override2.cfg`.
 
 ## 8. Cross-Project Compatibility
 
-The plugin is designed as a git submodule usable across any I, Voyager project without modification.
+The plugin is designed as a git submodule usable across any I, Voyager project. Enable the plugin in Project Settings → Plugins — no project-level config changes are needed.
 
 ### 8.1 Feature Availability
 

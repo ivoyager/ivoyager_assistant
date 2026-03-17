@@ -4,34 +4,22 @@
 
 **Goal:** Enable Claude Code to connect to the running simulation, query state, and exercise basic controls. This is the prerequisite for AI-assisted development testing.
 
-### Step 1.1: Create AssistantPreinitializer
+### Step 1.1: EditorPlugin Autoload Registration ✓
 
-**File:** `addons/ivoyager_assistant/assistant_preinitializer.gd`
+**File:** `addons/ivoyager_assistant/editor/editor_plugin.gd`
 
-- Extends `RefCounted`
-- In `_init()`:
-  - Register `AssistantServer` in `IVCoreInitializer.program_nodes`
-  - Read config from `ivoyager_assistant.cfg` `[assistant]` section
-  - Skip registration if `enabled == false` or (`debug_only == true` and not debug build)
-- Follow the pattern in `planetarium/preinitializer.gd`
+- EditorPlugin registers `IVAssistantServer` as an autoload via `add_autoload_singleton()` when the plugin is enabled
+- Removes the autoload in `_exit_tree()` when the plugin is disabled
+- No project-level config changes needed — developers just enable the plugin in Project Settings → Plugins
 
-**Config change:** Append to `ivoyager_override.cfg`:
-```ini
-preinitializers/AssistantPreinitializer="res://addons/ivoyager_assistant/assistant_preinitializer.gd"
-```
-
-### Step 1.2: Create AssistantServer Node
+### Step 1.2: Create IVAssistantServer Node ✓
 
 **File:** `addons/ivoyager_assistant/assistant_server.gd`
 
-- Extends `Node`
-- Properties:
-  - `_tcp_server: TCPServer`
-  - `_clients: Array[StreamPeerTCP]`
-  - `_port: int` (from config, default 29071)
-  - `_buffers: Dictionary` (client -> partial read buffer)
-- `_ready()`: connect to `IVStateManager.simulator_started` and `IVStateManager.about_to_quit`
-- `_on_simulator_started()`: create and start `TCPServer` on configured port
+- Extends `Node`, registered as autoload `IVAssistantServer`
+- `_ready()`: reads config from `ivoyager_assistant.cfg` (with overrides), checks `enabled`/`debug_only`, connects to `IVStateManager` signals
+- `_on_core_initialized()`: create and start `TCPServer` on configured port
+- `_on_simulator_started()`: cache program references, enable full API
 - `_process()`:
   - Accept new connections from `_tcp_server.take_connection()`
   - For each client: read available bytes, append to buffer, extract complete lines (split on `\n`)
@@ -54,14 +42,19 @@ Implement these methods in AssistantServer:
 - **`set_pause`** — Call `IVStateManager.set_user_paused()`
 - **`set_speed`** — Call `speed_manager.change_speed()`, `increment_speed()`, or `decrement_speed()`
 
-### Step 1.5: Add Configuration
+### Step 1.5: Add Configuration ✓
 
-Update `ivoyager_assistant.cfg`:
+`ivoyager_assistant.cfg` with autoload and runtime settings:
 ```ini
+[assistant_autoload]
+IVAssistantServer="../assistant_server.gd"
+
 [assistant]
 port=29071
 enabled=true
 debug_only=true
+assistant_name=""
+context_file=""
 ```
 
 ### Step 1.6: Create Claude Code Helper Script

@@ -19,8 +19,10 @@
 # *****************************************************************************
 extends Node
 
-## TCP server providing a JSON-RPC-style interface for AI testing and
-## accessibility. See SPECIFICATION.md for protocol details.
+## Singleton [IVAssistantServer] is TCP server providing a JSON-RPC-style
+## interface for AI testing and accessibility.
+##
+## See SPECIFICATION.md for protocol details.
 
 const BodyFlags := IVBody.BodyFlags
 
@@ -31,17 +33,11 @@ const ERR_BODY_NOT_FOUND := 3
 const ERR_NOT_STARTED := 4
 const ERR_NOT_ALLOWED := 5
 
-# Set by AssistantPreinitializer before instantiation
-static var configured_port := 29071
-static var configured_assistant_name := ""
-static var configured_context_file := ""
-
 var _tcp_server: TCPServer
 var _clients: Array[StreamPeerTCP] = []
 var _buffers: Dictionary = {} # StreamPeerTCP -> PackedByteArray
 var _port: int
 var _assistant_name: String
-var _context_file: String
 var _context_content: String
 var _listening := false # TCP server is active
 var _sim_started := false # simulator has started, program references cached
@@ -53,11 +49,23 @@ var _camera_handler: IVCameraHandler
 
 
 func _ready() -> void:
-	_port = configured_port
-	_assistant_name = configured_assistant_name
-	_context_file = configured_context_file
-	if _context_file:
-		_context_content = _load_context_file(_context_file)
+	var config := IVAssistantPluginUtils.get_ivoyager_config(
+			"res://addons/ivoyager_assistant/ivoyager_assistant.cfg")
+	var enabled: bool = config.get_value("assistant", "enabled", true)
+	var debug_only: bool = config.get_value("assistant", "debug_only", true)
+	if !enabled:
+		print("IVAssistantServer: disabled by config")
+		set_process(false)
+		return
+	if debug_only and !OS.is_debug_build():
+		print("IVAssistantServer: skipping (not a debug build)")
+		set_process(false)
+		return
+	_port = config.get_value("assistant", "port", 29071)
+	_assistant_name = config.get_value("assistant", "assistant_name", "")
+	var context_file: String = config.get_value("assistant", "context_file", "")
+	if context_file:
+		_context_content = _load_context_file(context_file)
 	IVStateManager.core_initialized.connect(_on_core_initialized)
 	IVStateManager.simulator_started.connect(_on_simulator_started)
 	IVStateManager.about_to_quit.connect(_on_about_to_quit)
@@ -68,10 +76,10 @@ func _on_core_initialized() -> void:
 	_tcp_server = TCPServer.new()
 	var err := _tcp_server.listen(_port, "127.0.0.1")
 	if err != OK:
-		push_error("AssistantServer: failed to listen on port %d (error %d)" % [_port, err])
+		push_error("IVAssistantServer: failed to listen on port %d (error %d)" % [_port, err])
 		return
 	_listening = true
-	print("AssistantServer: listening on 127.0.0.1:%d" % _port)
+	print("IVAssistantServer: listening on 127.0.0.1:%d" % _port)
 
 
 func _on_simulator_started() -> void:
@@ -948,11 +956,11 @@ func _parse_vector3(value: Variant, param_name: String) -> Variant:
 
 func _load_context_file(path: String) -> String:
 	if !FileAccess.file_exists(path):
-		push_warning("AssistantServer: context file not found: %s" % path)
+		push_warning("IVAssistantServer: context file not found: %s" % path)
 		return ""
 	var file := FileAccess.open(path, FileAccess.READ)
 	if !file:
-		push_warning("AssistantServer: failed to open context file: %s" % path)
+		push_warning("IVAssistantServer: failed to open context file: %s" % path)
 		return ""
 	return file.get_as_text()
 
