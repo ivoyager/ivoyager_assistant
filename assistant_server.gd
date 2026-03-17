@@ -46,6 +46,7 @@ var _selection_manager: IVSelectionManager
 var _speed_manager: IVSpeedManager
 var _timekeeper: IVTimekeeper
 var _camera_handler: IVCameraHandler
+var _save_singleton: Node # IVSave, if present (duck-typed)
 
 
 func _ready() -> void:
@@ -81,6 +82,7 @@ func _on_core_initialized() -> void:
 		return
 	_listening = true
 	print("IVAssistantServer: listening on 127.0.0.1:%d" % _port)
+	_save_singleton = get_node_or_null(^"/root/IVSave")
 
 
 func _on_simulator_started() -> void:
@@ -241,6 +243,8 @@ func _dispatch(method: String, params: Dictionary) -> Variant:
 			return _start_game()
 		"quit":
 			return _quit(params)
+		"get_save_status":
+			return _get_save_status()
 
 	# All remaining methods require the simulator to be started
 	if !_sim_started:
@@ -279,6 +283,11 @@ func _dispatch(method: String, params: Dictionary) -> Variant:
 			return _set_time(params)
 		"move_camera":
 			return _move_camera(params)
+		# Save/Load
+		"save_game":
+			return _save_game(params)
+		"load_game":
+			return _load_game(params)
 		_:
 			return {"_error": {"code": ERR_UNKNOWN_METHOD,
 					"message": "Unknown method: %s" % method}}
@@ -311,6 +320,10 @@ func _get_project_info() -> Dictionary:
 		capabilities.append("set_time")
 	if IVCoreSettings.wait_for_start:
 		capabilities.append("start_game")
+	if _save_singleton:
+		capabilities.append("save_game")
+		capabilities.append("load_game")
+		capabilities.append("get_save_status")
 
 	var display_name := _assistant_name if _assistant_name else project_name
 
@@ -353,7 +366,7 @@ func _get_state() -> Dictionary:
 		speed_name = _speed_manager.get_speed_name()
 		reversed = _speed_manager.reversed_time
 
-	return {
+	var result := {
 		"started": IVStateManager.started,
 		"running": IVStateManager.running,
 		"paused_tree": IVStateManager.paused_tree,
@@ -366,6 +379,14 @@ func _get_state() -> Dictionary:
 		"speed_name": speed_name,
 		"reversed_time": reversed,
 	}
+	if _save_singleton:
+		@warning_ignore_start("unsafe_property_access")
+		var is_saving: bool = _save_singleton.is_saving
+		var is_loading: bool = _save_singleton.is_loading
+		@warning_ignore_restore("unsafe_property_access")
+		result["is_saving"] = is_saving
+		result["is_loading"] = is_loading
+	return result
 
 
 func _get_time() -> Dictionary:
@@ -931,6 +952,63 @@ func _quit(params: Dictionary) -> Dictionary:
 	# Send response before quitting - use call_deferred so the response goes out first
 	IVStateManager.quit.call_deferred(force)
 	return {"ok": true}
+
+
+# ===========================================================================
+# Save/Load (requires IVSave plugin)
+# ===========================================================================
+
+func _save_game(params: Dictionary) -> Dictionary:
+	if !_save_singleton:
+		return {"_error": {"code": ERR_NOT_ALLOWED,
+				"message": "Save plugin not available"}}
+	var save_type: String = params.get("type", "quicksave")
+	if save_type != "quicksave" and save_type != "named" and save_type != "autosave":
+		return {"_error": {"code": ERR_INVALID_PARAMS,
+				"message": "Invalid type '%s'. Use 'quicksave', 'named', or 'autosave'" % save_type}}
+	@warning_ignore_start("unsafe_method_access")
+	match save_type:
+		"quicksave":
+			_save_singleton.quicksave()
+		"named":
+			var path: String = params.get("path", "")
+			_save_singleton.save_file(0, path) # 0 = NAMED_SAVE
+		"autosave":
+			_save_singleton.autosave()
+	@warning_ignore_restore("unsafe_method_access")
+	return {"ok": true}
+
+
+func _load_game(params: Dictionary) -> Dictionary:
+	if !_save_singleton:
+		return {"_error": {"code": ERR_NOT_ALLOWED,
+				"message": "Save plugin not available"}}
+	var path: String = params.get("path", "")
+	@warning_ignore_start("unsafe_method_access")
+	if path:
+		_save_singleton.load_file(false, path)
+	else:
+		_save_singleton.quickload()
+	@warning_ignore_restore("unsafe_method_access")
+	return {"ok": true}
+
+
+func _get_save_status() -> Dictionary:
+	if !_save_singleton:
+		return {"_error": {"code": ERR_NOT_ALLOWED,
+				"message": "Save plugin not available"}}
+	@warning_ignore_start("unsafe_property_access", "unsafe_method_access")
+	var save_dir: String = _save_singleton.get_directory()
+	var result := {
+		"is_saving": bool(_save_singleton.is_saving),
+		"is_loading": bool(_save_singleton.is_loading),
+		"directory": save_dir,
+		"has_saves": bool(_save_singleton.has_file(save_dir)),
+		"last_modified_path": String(_save_singleton.get_last_modified_file_path(save_dir)),
+		"file_extension": String(_save_singleton.file_extension),
+	}
+	@warning_ignore_restore("unsafe_property_access", "unsafe_method_access")
+	return result
 
 
 # ===========================================================================

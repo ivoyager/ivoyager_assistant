@@ -37,7 +37,7 @@ IVAssistantServer (autoload Node, root-level singleton)
 
 1. EditorPlugin registers `IVAssistantServer` as an autoload when the plugin is enabled
 2. On game start, `IVAssistantServer._ready()` reads config, checks `enabled`/`debug_only`, connects to `IVStateManager` signals
-3. On `core_initialized`: TCP server starts listening. Only `get_project_info`, `get_state`, `start_game`, and `quit` are available
+3. On `core_initialized`: TCP server starts listening, IVSave plugin detected (if present). Only `get_project_info`, `get_state`, `get_save_status`, `start_game`, and `quit` are available
 4. On `simulator_started`: program references cached (SelectionManager, SpeedManager, etc.). All API methods become available
 5. On `about_to_free_procedural_nodes`: cached references cleared, sim-dependent methods return errors
 6. On `about_to_quit`: TCP server shuts down
@@ -128,7 +128,7 @@ Start the simulation in projects with splash screens (`wait_for_start = true`). 
 ### 4.1 State Queries
 
 #### `get_state`
-Returns overall simulation state.
+Returns overall simulation state. If the Save plugin is present, includes `is_saving` and `is_loading` fields.
 
 **Params:** none
 
@@ -145,9 +145,13 @@ Returns overall simulation state.
   "clock": [14, 30, 0],
   "speed_index": 0,
   "speed_name": "1x",
-  "reversed_time": false
+  "reversed_time": false,
+  "is_saving": false,
+  "is_loading": false
 }
 ```
+
+`is_saving` and `is_loading` are only present when the IVSave plugin is enabled.
 
 #### `get_time`
 Returns detailed time information.
@@ -354,7 +358,62 @@ Change a user setting.
 - `setting` (string, required) — Setting name
 - `value` (variant, required) — New value
 
-### 4.5 Testing Utilities
+### 4.5 Save/Load (requires IVSave plugin)
+
+These methods are only available when the `ivoyager_save` plugin is present and enabled. They appear in `get_project_info` capabilities only when detected. If called without the plugin, they return error code 5 ("Save plugin not available").
+
+Save and load operations are **asynchronous**. The methods return `{"ok": true}` immediately. Poll `get_state` to detect completion via the `is_saving` / `is_loading` fields.
+
+#### `save_game`
+Trigger a save operation. Requires simulator started.
+
+**Params:**
+- `type` (string, optional, default `"quicksave"`) — One of `"quicksave"`, `"named"`, or `"autosave"`
+- `path` (string, optional) — File path for `"named"` saves. If omitted for `"named"`, requests a dialog (not useful for automated testing)
+
+**Result:** `{"ok": true}`
+
+**Example:**
+```json
+{"id": 1, "method": "save_game", "params": {}}
+{"id": 1, "method": "save_game", "params": {"type": "quicksave"}}
+{"id": 1, "method": "save_game", "params": {"type": "named", "path": "C:/saves/test.MyProjectSave"}}
+```
+
+#### `load_game`
+Trigger a load operation. Requires simulator started.
+
+**Params:**
+- `path` (string, optional) — Specific save file to load. If omitted, loads the most recently modified save file (quickload)
+
+**Result:** `{"ok": true}`
+
+During load, `_sim_started` transitions to `false` and back to `true`. Most other methods return error code 4 during this window. Poll `get_state` (always available) until `started` is `true` and `is_loading` is `false`.
+
+**Example:**
+```json
+{"id": 1, "method": "load_game", "params": {}}
+{"id": 1, "method": "load_game", "params": {"path": "C:/saves/test.MyProjectSave"}}
+```
+
+#### `get_save_status`
+Query save/load status and file information. Available before simulator starts.
+
+**Params:** none
+
+**Result:**
+```json
+{
+  "is_saving": false,
+  "is_loading": false,
+  "directory": "C:/Users/user/AppData/Roaming/Godot/app_userdata/ProjectName/saves",
+  "has_saves": true,
+  "last_modified_path": "C:/Users/.../saves/Quicksave_2026-01-01_12.00.00.MyProjectSave",
+  "file_extension": "MyProjectSave"
+}
+```
+
+### 4.6 Testing Utilities (Phase 3)
 
 #### `screenshot`
 Capture viewport to a file.
@@ -379,6 +438,7 @@ The AssistantServer reads from and writes to these core objects:
 | `SpeedManager` | Via `IVGlobal.program[&"SpeedManager"]` | Speed index, `change_speed()` |
 | `Timekeeper` | Via `IVGlobal.program[&"Timekeeper"]` | Time queries and `set_time()` |
 | `CameraHandler` | Via `IVGlobal.program[&"CameraHandler"]` | Camera state and `move_to()` |
+| `IVSave` | Autoload singleton (optional) | Save/load operations, save status queries (duck-typed) |
 
 ## 6. Threading and Safety
 
@@ -430,6 +490,7 @@ Not all projects support all features. The `capabilities` array returned by `get
 - **Program objects**: Methods requiring `TopUI`, `CameraHandler`, `SpeedManager`, or `Timekeeper` are only listed if those objects are registered.
 - **Settings**: `set_time` requires `IVCoreSettings.allow_time_setting == true`.
 - **Project type**: `start_game` is only listed for projects with `IVCoreSettings.wait_for_start == true`.
+- **Plugins**: `save_game`, `load_game`, and `get_save_status` are only listed when the `ivoyager_save` plugin is present.
 
 Methods not in the capabilities list will return appropriate error codes (ERR_NOT_STARTED or ERR_NOT_ALLOWED) if called.
 
