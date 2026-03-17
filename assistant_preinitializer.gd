@@ -40,6 +40,12 @@ func _init() -> void:
 	var port: int = config.get_value("assistant", "port", 29071)
 	AssistantServer.configured_port = port
 
+	var assistant_name: String = config.get_value("assistant", "assistant_name", "")
+	AssistantServer.configured_assistant_name = assistant_name
+
+	var context_file: String = config.get_value("assistant", "context_file", "")
+	AssistantServer.configured_context_file = context_file
+
 	IVCoreInitializer.program_nodes[&"AssistantServer"] = AssistantServer
 	print("Assistant: registered AssistantServer (port %d)" % port)
 

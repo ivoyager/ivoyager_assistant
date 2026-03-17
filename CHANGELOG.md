@@ -20,3 +20,7 @@ Under development using Godot 4.6.1.
 * AssistantPreinitializer for config-driven registration; server only starts if enabled and (optionally) only in debug builds.
 * Configuration via `ivoyager_assistant.cfg` with override support from `ivoyager_override.cfg`.
 * Bash helper script `tools/assistant_client.sh` for command-line interaction with the server.
+* Cross-project compatibility: two-phase TCP startup (listens on `core_initialized`, full API on `simulator_started`) supporting projects with splash screens.
+* Project info: `get_project_info` returns project name, version, assistant name, capabilities, and optional context.
+* Game start: `start_game` allows AI clients to bypass splash screens for automated testing.
+* Configuration: `assistant_name` and `context_file` config keys for project-specific assistant identity.

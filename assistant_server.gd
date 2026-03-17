@@ -33,12 +33,18 @@ const ERR_NOT_ALLOWED := 5
 
 # Set by AssistantPreinitializer before instantiation
 static var configured_port := 29071
+static var configured_assistant_name := ""
+static var configured_context_file := ""
 
 var _tcp_server: TCPServer
 var _clients: Array[StreamPeerTCP] = []
 var _buffers: Dictionary = {} # StreamPeerTCP -> PackedByteArray
 var _port: int
-var _started := false
+var _assistant_name: String
+var _context_file: String
+var _context_content: String
+var _listening := false # TCP server is active
+var _sim_started := false # simulator has started, program references cached
 
 var _selection_manager: IVSelectionManager
 var _speed_manager: IVSpeedManager
@@ -48,9 +54,24 @@ var _camera_handler: IVCameraHandler
 
 func _ready() -> void:
 	_port = configured_port
+	_assistant_name = configured_assistant_name
+	_context_file = configured_context_file
+	if _context_file:
+		_context_content = _load_context_file(_context_file)
+	IVStateManager.core_initialized.connect(_on_core_initialized)
 	IVStateManager.simulator_started.connect(_on_simulator_started)
 	IVStateManager.about_to_quit.connect(_on_about_to_quit)
 	IVStateManager.about_to_free_procedural_nodes.connect(_on_about_to_free)
+
+
+func _on_core_initialized() -> void:
+	_tcp_server = TCPServer.new()
+	var err := _tcp_server.listen(_port, "127.0.0.1")
+	if err != OK:
+		push_error("AssistantServer: failed to listen on port %d (error %d)" % [_port, err])
+		return
+	_listening = true
+	print("AssistantServer: listening on 127.0.0.1:%d" % _port)
 
 
 func _on_simulator_started() -> void:
@@ -61,14 +82,7 @@ func _on_simulator_started() -> void:
 	_speed_manager = IVGlobal.program.get(&"SpeedManager")
 	_timekeeper = IVGlobal.program.get(&"Timekeeper")
 	_camera_handler = IVGlobal.program.get(&"CameraHandler")
-
-	_tcp_server = TCPServer.new()
-	var err := _tcp_server.listen(_port, "127.0.0.1")
-	if err != OK:
-		push_error("AssistantServer: failed to listen on port %d (error %d)" % [_port, err])
-		return
-	_started = true
-	print("AssistantServer: listening on 127.0.0.1:%d" % _port)
+	_sim_started = true
 
 
 func _on_about_to_quit() -> void:
@@ -76,7 +90,11 @@ func _on_about_to_quit() -> void:
 
 
 func _on_about_to_free() -> void:
-	_shutdown()
+	_sim_started = false
+	_selection_manager = null
+	_speed_manager = null
+	_timekeeper = null
+	_camera_handler = null
 
 
 func _shutdown() -> void:
@@ -87,11 +105,12 @@ func _shutdown() -> void:
 		client.disconnect_from_host()
 	_clients.clear()
 	_buffers.clear()
-	_started = false
+	_listening = false
+	_sim_started = false
 
 
 func _process(_delta: float) -> void:
-	if !_started:
+	if !_listening:
 		return
 
 	# Accept new connections
@@ -203,10 +222,24 @@ func _error_response(id: Variant, code: int, message: String) -> String:
 
 
 func _dispatch(method: String, params: Dictionary) -> Variant:
+	# Methods available before simulator_started
 	match method:
-		# State Queries
+		"get_project_info":
+			return _get_project_info()
 		"get_state":
 			return _get_state()
+		"start_game":
+			return _start_game()
+		"quit":
+			return _quit(params)
+
+	# All remaining methods require the simulator to be started
+	if !_sim_started:
+		return {"_error": {"code": ERR_NOT_STARTED,
+				"message": "Simulator not started"}}
+
+	match method:
+		# State Queries
 		"get_time":
 			return _get_time()
 		"get_selection":
@@ -237,11 +270,65 @@ func _dispatch(method: String, params: Dictionary) -> Variant:
 			return _set_time(params)
 		"move_camera":
 			return _move_camera(params)
-		"quit":
-			return _quit(params)
 		_:
 			return {"_error": {"code": ERR_UNKNOWN_METHOD,
 					"message": "Unknown method: %s" % method}}
+
+
+# ===========================================================================
+# Project Info (available before simulator_started)
+# ===========================================================================
+
+func _get_project_info() -> Dictionary:
+	var project_name: String = ProjectSettings.get_setting("application/config/name", "")
+	var project_version: String = ProjectSettings.get_setting("application/config/version", "")
+
+	# Build capabilities based on available program objects and settings
+	var capabilities: Array[String] = [
+		"get_state", "get_time", "list_bodies",
+		"get_body_info", "get_body_position", "get_body_orbit", "get_body_distance",
+		"set_pause", "quit", "get_project_info",
+	]
+	if IVGlobal.program.has(&"TopUI"):
+		capabilities.append("select_body")
+		capabilities.append("select_navigate")
+		capabilities.append("get_selection")
+	if IVGlobal.program.has(&"CameraHandler"):
+		capabilities.append("get_camera")
+		capabilities.append("move_camera")
+	if IVGlobal.program.has(&"SpeedManager"):
+		capabilities.append("set_speed")
+	if IVGlobal.program.has(&"Timekeeper") and IVCoreSettings.allow_time_setting:
+		capabilities.append("set_time")
+	if IVCoreSettings.wait_for_start:
+		capabilities.append("start_game")
+
+	var display_name := _assistant_name if _assistant_name else project_name
+
+	var result: Dictionary = {
+		"project_name": project_name,
+		"project_version": project_version,
+		"assistant_name": display_name,
+		"started": IVStateManager.started,
+		"ok_to_start": IVStateManager.ok_to_start,
+		"wait_for_start": IVCoreSettings.wait_for_start,
+		"allow_time_setting": IVCoreSettings.allow_time_setting,
+		"capabilities": capabilities,
+	}
+	if _context_content:
+		result["context"] = _context_content
+	return result
+
+
+func _start_game() -> Dictionary:
+	if IVStateManager.started:
+		return {"_error": {"code": ERR_NOT_ALLOWED,
+				"message": "Simulator already started"}}
+	if !IVStateManager.ok_to_start:
+		return {"_error": {"code": ERR_NOT_ALLOWED,
+				"message": "Not ready to start"}}
+	IVStateManager.start()
+	return {"ok": true}
 
 
 # ===========================================================================
@@ -857,6 +944,17 @@ func _parse_vector3(value: Variant, param_name: String) -> Variant:
 	var y: float = arr[1]
 	var z: float = arr[2]
 	return Vector3(x, y, z)
+
+
+func _load_context_file(path: String) -> String:
+	if !FileAccess.file_exists(path):
+		push_warning("AssistantServer: context file not found: %s" % path)
+		return ""
+	var file := FileAccess.open(path, FileAccess.READ)
+	if !file:
+		push_warning("AssistantServer: failed to open context file: %s" % path)
+		return ""
+	return file.get_as_text()
 
 
 func _get_global_position(body: IVBody, time: float) -> Vector3:

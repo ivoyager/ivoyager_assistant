@@ -114,6 +114,36 @@ After Phase 1 implementation, verify by:
 
 ---
 
+## Step 2.5: Cross-Project Compatibility ✓
+
+**Goal:** Make the assistant plugin usable across all I, Voyager projects (Planetarium, Project Template, Astropolis SDK) without code changes in the plugin.
+
+### Step 2.5.1: Two-Phase TCP Startup ✓
+
+Moved TCP server start from `simulator_started` to `core_initialized`. The server now listens before the simulation starts, which is critical for projects with splash screens (`wait_for_start = true`). Program object references are cached on `simulator_started`. Methods that need these objects check `_sim_started` and return `ERR_NOT_STARTED` if false.
+
+### Step 2.5.2: Project Identity and Context ✓
+
+Added config keys `assistant_name` and `context_file` to `ivoyager_assistant.cfg`. Read in `assistant_preinitializer.gd` and passed via static vars to `AssistantServer`. Context file content loaded at init time.
+
+### Step 2.5.3: New Method — get_project_info ✓
+
+Returns project name, version, assistant name, simulator state, config flags (`allow_time_setting`, `wait_for_start`), available capabilities array, and optional context content. Works before `simulator_started`.
+
+### Step 2.5.4: New Method — start_game ✓
+
+Calls `IVStateManager.start()` when `ok_to_start == true`. Enables AI clients to bypass splash screens for automated testing.
+
+### Step 2.5.5: Graceful Sim State Reset ✓
+
+`about_to_free_procedural_nodes` clears cached references and sets `_sim_started = false` without shutting down the TCP server. `about_to_quit` performs full TCP shutdown.
+
+### Step 2.5.6: Update Documentation and Client Script ✓
+
+Updated SPECIFICATION.md with new lifecycle, methods, config keys, and cross-project behavior section. Updated `assistant_client.sh` error message to be project-agnostic.
+
+---
+
 ## Phase 3: Testing Framework
 
 **Goal:** Add utilities specifically designed for automated test scenarios.
