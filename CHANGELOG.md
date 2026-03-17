@@ -24,3 +24,6 @@ Under development using Godot 4.6.1.
 * Project info: `get_project_info` returns project name, version, assistant name, capabilities, and optional context.
 * Game start: `start_game` allows AI clients to bypass splash screens for automated testing.
 * Configuration: `assistant_name` and `context_file` config keys for project-specific assistant identity.
+* Screenshot capture: `screenshot` method saves viewport to PNG with optional `hide_gui` parameter for clean 3D captures.
+* GUI visibility control: `show_hide_gui` method to show/hide all GUI panels (pulled forward from Phase 4 as a screenshot prerequisite).
+* State vectors: `get_body_state_vectors` returns position and velocity vectors for orbital mechanics testing.

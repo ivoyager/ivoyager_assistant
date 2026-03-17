@@ -137,19 +137,27 @@ Updated SPECIFICATION.md with new lifecycle, methods, config keys, and cross-pro
 
 ---
 
-## Phase 3: Testing Framework
+## Phase 3: Testing Framework ✓
 
 **Goal:** Add utilities specifically designed for automated test scenarios.
 
-### Step 3.1: Screenshot Capture
+### Step 3.1: GUI Visibility (pulled forward from Phase 4) ✓
+
+- **`show_hide_gui`** — Emit `IVGlobal.show_hide_gui_requested`. Prerequisite for clean screenshots.
+
+### Step 3.2: Screenshot Capture ✓
 
 - **`screenshot`** — `get_viewport().get_texture().get_image().save_png(path)`
-- Returns file path for Claude Code to read via the Read tool
+- Returns file path and image size for Claude Code to read via the Read tool
+- Optional `hide_gui` parameter: temporarily hides GUI, forces a synchronous render via `RenderingServer.force_draw(true)`, captures, then restores GUI
 
-### Step 3.2: Validation Helpers
+### Step 3.3: State Vectors ✓
 
-- **`get_body_state_vectors`** — Returns both position and velocity vectors
-- Bulk query methods for testing orbital mechanics across multiple bodies
+- **`get_body_state_vectors`** — Returns both position and velocity vectors relative to parent via `IVBody.get_state_vectors(time)`
+
+### Step 3.4: Test Window Resolution ✓
+
+- Updated CLAUDE.md launch command from `--resolution 800x600` to `--resolution 1920x1080` to give GUI panels proper room and produce meaningful screenshots
 
 ---
 
@@ -157,9 +165,8 @@ Updated SPECIFICATION.md with new lifecycle, methods, config keys, and cross-pro
 
 **Goal:** Enable programmatic control of all GUI elements.
 
-### Step 4.1: GUI Visibility
+### Step 4.1: GUI State
 
-- **`show_hide_gui`** — Emit `IVGlobal.show_hide_gui_requested`
 - **`get_gui_state`** — Report visibility of panels
 
 ### Step 4.2: Settings and Options

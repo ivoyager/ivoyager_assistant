@@ -286,6 +286,24 @@ Returns distance between two bodies.
 }
 ```
 
+#### `get_body_state_vectors`
+Returns position and velocity vectors of a body relative to its parent.
+
+**Params:**
+- `name` (string, required)
+- `time` (float, optional) — TT J2000 seconds. Default: current simulation time.
+
+**Result:**
+```json
+{
+  "position": [1.496e11, 0.0, 0.0],
+  "velocity": [0.0, 2.978e4, 0.0],
+  "time": 7.889e8
+}
+```
+
+Note: Velocity computation is experimental (`@experimental` in IVOrbit).
+
 ### 4.3 Controls
 
 #### `select_body`
@@ -343,15 +361,17 @@ Move the camera to a target.
 
 **Result:** `{"ok": true}`
 
-### 4.4 GUI Control (Phase 4)
+### 4.4 GUI Control
 
 #### `show_hide_gui`
-Toggle GUI visibility.
+Show or hide all GUI panels. Emits `IVGlobal.show_hide_gui_requested` which is handled by `IVShowHideUI`.
 
 **Params:**
-- `visible` (bool, required)
+- `visible` (bool, required) — true to show, false to hide
 
-#### `set_option`
+**Result:** `{"ok": true, "visible": true}`
+
+#### `set_option` (Phase 4)
 Change a user setting.
 
 **Params:**
@@ -413,15 +433,25 @@ Query save/load status and file information. Available before simulator starts.
 }
 ```
 
-### 4.6 Testing Utilities (Phase 3)
+### 4.6 Testing Utilities
 
 #### `screenshot`
-Capture viewport to a file.
+Capture viewport to a PNG file. Optionally hides GUI before capture and restores it after.
 
 **Params:**
-- `path` (string, required) — Output file path (PNG)
+- `path` (string, required) — Output file path (must be a valid writable path)
+- `hide_gui` (bool, optional, default false) — Temporarily hide GUI, force a synchronous render, capture, then restore GUI
 
-**Result:** `{"ok": true, "path": "/tmp/screenshot.png"}`
+**Result:**
+```json
+{
+  "ok": true,
+  "path": "C:/tmp/screenshot.png",
+  "size": [1920, 1080]
+}
+```
+
+When `hide_gui` is true, the method hides the GUI via `IVGlobal.show_hide_gui_requested`, calls `RenderingServer.force_draw(true)` to synchronously render a frame without GUI, captures, then restores GUI visibility. Alternatively, call `show_hide_gui` separately before `screenshot` — the per-frame TCP processing naturally inserts a render between requests.
 
 ## 5. Core API Dependencies
 

@@ -270,6 +270,8 @@ func _dispatch(method: String, params: Dictionary) -> Variant:
 			return _get_body_orbit(params)
 		"get_body_distance":
 			return _get_body_distance(params)
+		"get_body_state_vectors":
+			return _get_body_state_vectors(params)
 		# Controls
 		"select_body":
 			return _select_body(params)
@@ -283,6 +285,12 @@ func _dispatch(method: String, params: Dictionary) -> Variant:
 			return _set_time(params)
 		"move_camera":
 			return _move_camera(params)
+		# GUI
+		"show_hide_gui":
+			return _show_hide_gui(params)
+		# Testing
+		"screenshot":
+			return _screenshot(params)
 		# Save/Load
 		"save_game":
 			return _save_game(params)
@@ -305,7 +313,9 @@ func _get_project_info() -> Dictionary:
 	var capabilities: Array[String] = [
 		"get_state", "get_time", "list_bodies",
 		"get_body_info", "get_body_position", "get_body_orbit", "get_body_distance",
+		"get_body_state_vectors",
 		"set_pause", "quit", "get_project_info",
+		"show_hide_gui", "screenshot",
 	]
 	if IVGlobal.program.has(&"TopUI"):
 		capabilities.append("select_body")
@@ -662,6 +672,44 @@ func _get_body_distance(params: Dictionary) -> Dictionary:
 	}
 
 
+func _get_body_state_vectors(params: Dictionary) -> Dictionary:
+	var body_name: Variant = params.get("name")
+	if typeof(body_name) != TYPE_STRING or body_name == "":
+		return {"_error": {"code": ERR_INVALID_PARAMS,
+				"message": "Missing or invalid 'name' parameter"}}
+
+	var name_str: String = body_name
+	var sn := StringName(name_str)
+	if !IVBody.bodies.has(sn):
+		return {"_error": {"code": ERR_BODY_NOT_FOUND,
+				"message": "Body not found: %s" % name_str}}
+
+	var time_val := NAN
+	var time_var: Variant = params.get("time")
+	if time_var != null:
+		if typeof(time_var) != TYPE_FLOAT and typeof(time_var) != TYPE_INT:
+			return {"_error": {"code": ERR_INVALID_PARAMS,
+					"message": "'time' must be a number"}}
+		var time_num: float = time_var
+		time_val = time_num
+
+	var body: IVBody = IVBody.bodies[sn]
+	var vectors: Array[Vector3] = body.get_state_vectors(time_val)
+	var pos: Vector3 = vectors[0]
+	var vel: Vector3 = vectors[1]
+
+	var response_time := time_val
+	if is_nan(response_time):
+		var current: float = IVGlobal.times[0]
+		response_time = current
+
+	return {
+		"position": [pos.x, pos.y, pos.z],
+		"velocity": [vel.x, vel.y, vel.z],
+		"time": response_time,
+	}
+
+
 # ===========================================================================
 # Controls
 # ===========================================================================
@@ -952,6 +1000,56 @@ func _quit(params: Dictionary) -> Dictionary:
 	# Send response before quitting - use call_deferred so the response goes out first
 	IVStateManager.quit.call_deferred(force)
 	return {"ok": true}
+
+
+# ===========================================================================
+# GUI
+# ===========================================================================
+
+func _show_hide_gui(params: Dictionary) -> Dictionary:
+	var vis_var: Variant = params.get("visible")
+	if typeof(vis_var) != TYPE_BOOL:
+		return {"_error": {"code": ERR_INVALID_PARAMS,
+				"message": "Missing or invalid 'visible' parameter (must be bool)"}}
+	var vis: bool = vis_var
+	IVGlobal.show_hide_gui_requested.emit(false, vis)
+	return {"ok": true, "visible": vis}
+
+
+# ===========================================================================
+# Testing
+# ===========================================================================
+
+func _screenshot(params: Dictionary) -> Dictionary:
+	var path_var: Variant = params.get("path")
+	if typeof(path_var) != TYPE_STRING or path_var == "":
+		return {"_error": {"code": ERR_INVALID_PARAMS,
+				"message": "Missing or invalid 'path' parameter"}}
+	var path: String = path_var
+
+	var hide_gui := false
+	var hide_var: Variant = params.get("hide_gui")
+	if hide_var != null:
+		if typeof(hide_var) != TYPE_BOOL:
+			return {"_error": {"code": ERR_INVALID_PARAMS,
+					"message": "'hide_gui' must be a boolean"}}
+		var hide_bool: bool = hide_var
+		hide_gui = hide_bool
+
+	if hide_gui:
+		IVGlobal.show_hide_gui_requested.emit(false, false)
+		RenderingServer.force_draw(true)
+
+	var image := get_viewport().get_texture().get_image()
+	var err := image.save_png(path)
+
+	if hide_gui:
+		IVGlobal.show_hide_gui_requested.emit(false, true)
+
+	if err != OK:
+		return {"_error": {"code": ERR_INVALID_PARAMS,
+				"message": "Failed to save screenshot: %s" % error_string(err)}}
+	return {"ok": true, "path": path, "size": [image.get_width(), image.get_height()]}
 
 
 # ===========================================================================
