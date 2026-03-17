@@ -29,10 +29,10 @@ AssistantServer (Node, child of Universe)
   ├─ _ready(): connects to IVStateManager.simulator_started
   ├─ on simulator_started: starts TCPServer on localhost:29071
   └─ _process(): polls TCP, reads JSON commands, dispatches, writes JSON responses
-       ├─ reads from: IVGlobal, IVStateManager, IVBody.bodies, SelectionManager,
-       │              Timekeeper, SpeedManager, CameraHandler
-       └─ writes to: SelectionManager, SpeedManager, Timekeeper, CameraHandler,
-                     IVStateManager (pause)
+	   ├─ reads from: IVGlobal, IVStateManager, IVBody.bodies, SelectionManager,
+	   │              Timekeeper, SpeedManager, CameraHandler
+	   └─ writes to: SelectionManager, SpeedManager, Timekeeper, CameraHandler,
+					 IVStateManager (pause)
 ```
 
 ### 2.3 Lifecycle
