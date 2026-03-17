@@ -88,29 +88,29 @@ After Phase 1 implementation, verify by:
 
 ---
 
-## Phase 2: Body Information and Camera Control
+## Phase 2: Body Information and Camera Control ✓
 
 **Goal:** Enable querying detailed body properties and controlling the camera for comprehensive testing.
 
-### Step 2.1: Body Information Queries
+### Step 2.1: Body Information Queries ✓
 
-- **`get_body_info`** — Read IVBody properties: `mean_radius`, `gravitational_parameter`, `flags`, parent name, satellite names, `characteristics` dict subset
-- **`get_body_position`** — Call `body.get_position_vector(time)`
-- **`get_body_orbit`** — Read orbital elements from `body.get_orbit()`: semi_major_axis, eccentricity, inclination, longitude_ascending_node, argument_periapsis
+- **`get_body_info`** — Returns `name`, `gui_name`, `flags`, `mean_radius`, `gravitational_parameter`, `parent`, `satellites`
+- **`get_body_position`** — Calls `body.get_position_vector(time)`, returns `[x, y, z]` position relative to parent
+- **`get_body_orbit`** — Returns `semi_major_axis`, `eccentricity`, `inclination`, `longitude_ascending_node`, `argument_periapsis`, `period` via IVOrbit element accessors
+- **`get_body_distance`** — Computes global positions by chaining parent positions up the tree, returns Euclidean distance
 
-### Step 2.2: Camera Control
+### Step 2.2: Camera Control ✓
 
-- **`get_camera`** — Read `CameraHandler.get_camera_view_state()` (target, flags, view_position, view_rotations)
-- **`move_camera`** — Call `CameraHandler.move_to()` or `move_to_by_name()`
+- **`get_camera`** — Returns target, flags, view_position, view_rotations, is_camera_lock via `CameraHandler.get_camera_view_state()` plus viewport camera property
+- **`move_camera`** — Calls `CameraHandler.move_to_by_name()` or `move_to()` with optional target, view_position, view_rotations, instant parameters
 
-### Step 2.3: Time Control
+### Step 2.3: Time Control ✓
 
-- **`set_time`** — Call `Timekeeper.set_time()` for absolute time, or compute time from date elements
+- **`set_time`** — Three modes: absolute TT seconds via `Timekeeper.set_time()`, Gregorian date via `set_time_from_date_clock_elements()`, or OS sync via `synchronize_with_operating_system()`. Validates dates with `IVTimekeeper.is_valid_gregorian_date()`. Requires `IVCoreSettings.allow_time_setting == true`.
 
-### Step 2.4: Distance and Navigation
+### Step 2.4: Selection Navigation ✓
 
-- **`get_body_distance`** — Compute distance between two bodies at a given time
-- **`select_navigate`** — Map direction strings to SelectionManager navigation methods
+- **`select_navigate`** — Maps 16 direction strings to `IVSelectionManager` navigation methods: up, down, next, last, next/last_planet, next/last_moon, next/last_major_moon, next/last_star, next/last_spacecraft, history_back, history_forward. Checks `has_*()` before calling `select_*()`.
 
 ---
 

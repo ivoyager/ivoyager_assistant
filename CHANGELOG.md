@@ -10,7 +10,11 @@ Under development using Godot 4.6.1.
 
 ### Added
 * TCP server (AssistantServer) providing a JSON-RPC-style interface on port 29071 for AI testing and accessibility.
-* State queries: `get_state`, `get_time`, `get_selection`, `list_bodies` (with filter for stars, planets, dwarf_planets, moons, spacecraft).
+* State queries: `get_state`, `get_time`, `get_selection`, `get_camera`, `list_bodies` (with filter for stars, planets, dwarf_planets, moons, spacecraft).
+* Body queries: `get_body_info`, `get_body_position`, `get_body_orbit`, `get_body_distance` with optional time parameter.
+* Selection navigation: `select_navigate` supporting up, down, next, last, and type-specific traversal (planets, moons, stars, spacecraft, major moons, history).
+* Camera control: `move_camera` with optional target, view position, view rotations, and instant move.
+* Time control: `set_time` supporting absolute TT seconds, Gregorian date arrays, and OS time sync.
 * Basic controls: `select_body`, `set_pause`, `set_speed` (by index, delta, or real_time).
 * Application quit: `quit` with optional `force` parameter for clean shutdown.
 * AssistantPreinitializer for config-driven registration; server only starts if enabled and (optionally) only in debug builds.
