@@ -27,3 +27,5 @@ Under development using Godot 4.6.1.
 * Screenshot capture: `screenshot` method saves viewport to PNG with optional `hide_gui` parameter for clean 3D captures.
 * GUI visibility control: `show_hide_gui` method to show/hide all GUI panels (pulled forward from Phase 4 as a screenshot prerequisite).
 * State vectors: `get_body_state_vectors` returns position and velocity vectors for orbital mechanics testing.
+* Action emulation: `press_action` injects real `InputEventKey` events into Godot's input pipeline, enabling programmatic triggering of any user hotkey action.
+* Action listing: `list_actions` returns all registered input actions with display names from `IVInputMapManager`.

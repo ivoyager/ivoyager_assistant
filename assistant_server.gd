@@ -291,6 +291,11 @@ func _dispatch(method: String, params: Dictionary) -> Variant:
 		# Testing
 		"screenshot":
 			return _screenshot(params)
+		# Actions
+		"list_actions":
+			return _list_actions()
+		"press_action":
+			return _press_action(params)
 		# Save/Load
 		"save_game":
 			return _save_game(params)
@@ -316,6 +321,7 @@ func _get_project_info() -> Dictionary:
 		"get_body_state_vectors",
 		"set_pause", "quit", "get_project_info",
 		"show_hide_gui", "screenshot",
+		"list_actions", "press_action",
 	]
 	if IVGlobal.program.has(&"TopUI"):
 		capabilities.append("select_body")
@@ -1053,6 +1059,53 @@ func _screenshot(params: Dictionary) -> Dictionary:
 
 
 # ===========================================================================
+# Actions
+# ===========================================================================
+
+func _list_actions() -> Dictionary:
+	var actions := {}
+	for action: StringName in IVInputMapManager.defaults:
+		var label: StringName = IVInputMapManager.action_texts.get(action, &"")
+		var display_name := tr(label) if label else String(action)
+		actions[String(action)] = display_name
+	return {"actions": actions}
+
+
+func _press_action(params: Dictionary) -> Dictionary:
+	var action_var: Variant = params.get("action")
+	if typeof(action_var) != TYPE_STRING or action_var == "":
+		return {"_error": {"code": ERR_INVALID_PARAMS,
+				"message": "Missing or invalid 'action' parameter"}}
+
+	var action: String = action_var
+	var sn := StringName(action)
+	if !InputMap.has_action(sn):
+		return {"_error": {"code": ERR_INVALID_PARAMS,
+				"message": "Unknown action: %s" % action}}
+
+	var events := InputMap.action_get_events(sn)
+	var key_event: InputEventKey
+	for event: InputEvent in events:
+		if event is InputEventKey:
+			key_event = event
+			break
+
+	if !key_event:
+		return {"_error": {"code": ERR_INVALID_PARAMS,
+				"message": "Action '%s' has no key binding" % action}}
+
+	var press: InputEventKey = key_event.duplicate()
+	press.pressed = true
+	Input.parse_input_event(press)
+
+	var release: InputEventKey = key_event.duplicate()
+	release.pressed = false
+	Input.parse_input_event(release)
+
+	return {"ok": true, "action": action}
+
+
+# ===========================================================================
 # Save/Load (requires IVSave plugin)
 # ===========================================================================
 
@@ -1095,9 +1148,11 @@ func _get_save_status() -> Dictionary:
 	if !_save_singleton:
 		return {"_error": {"code": ERR_NOT_ALLOWED,
 				"message": "Save plugin not available"}}
-	@warning_ignore_start("unsafe_property_access", "unsafe_method_access")
+	@warning_ignore_start("unsafe_property_access", "unsafe_method_access",
+			"unsafe_call_argument")
 	var save_dir: String = _save_singleton.get_directory()
 	var result := {
+		
 		"is_saving": bool(_save_singleton.is_saving),
 		"is_loading": bool(_save_singleton.is_loading),
 		"directory": save_dir,
@@ -1105,7 +1160,8 @@ func _get_save_status() -> Dictionary:
 		"last_modified_path": String(_save_singleton.get_last_modified_file_path(save_dir)),
 		"file_extension": String(_save_singleton.file_extension),
 	}
-	@warning_ignore_restore("unsafe_property_access", "unsafe_method_access")
+	@warning_ignore_restore("unsafe_property_access", "unsafe_method_access",
+			"unsafe_call_argument")
 	return result
 
 

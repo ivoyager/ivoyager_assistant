@@ -161,6 +161,20 @@ Updated SPECIFICATION.md with new lifecycle, methods, config keys, and cross-pro
 
 ---
 
+## Phase 3b: Action Emulation ✓
+
+**Goal:** Emulate user hotkey actions programmatically, giving the Assistant access to all user-facing actions without dedicated API methods for each.
+
+### Step 3b.1: List Actions ✓
+
+- **`list_actions`** — Returns all registered input actions from `IVInputMapManager.defaults` with display names from `action_texts`
+
+### Step 3b.2: Press Action ✓
+
+- **`press_action`** — Injects a real `InputEventKey` into Godot's input pipeline via `Input.parse_input_event()`. Gets the action's registered keybinding from `InputMap.action_get_events()`, duplicates it, and injects press + release events. Flows through `_shortcut_input()` handlers exactly like a real key press.
+
+---
+
 ## Phase 4: GUI Manipulation
 
 **Goal:** Enable programmatic control of all GUI elements.

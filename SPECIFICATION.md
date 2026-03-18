@@ -453,6 +453,37 @@ Capture viewport to a PNG file. Optionally hides GUI before capture and restores
 
 When `hide_gui` is true, the method hides the GUI via `IVGlobal.show_hide_gui_requested`, calls `RenderingServer.force_draw(true)` to synchronously render a frame without GUI, captures, then restores GUI visibility. Alternatively, call `show_hide_gui` separately before `screenshot` — the per-frame TCP processing naturally inserts a render between requests.
 
+### 4.7 Action Emulation
+
+#### `list_actions`
+Returns all registered input actions with their display names. Actions are defined by `IVInputMapManager` and include display toggles, camera controls, selection navigation, time controls, and administrative actions.
+
+**Params:** none
+
+**Result:**
+```json
+{
+  "actions": {
+    "toggle_orbits": "Show/Hide Orbits",
+    "toggle_names": "Show/Hide Names",
+    "toggle_symbols": "Show/Hide Symbols",
+    "toggle_pause": "Toggle Pause",
+    "recenter": "Recenter",
+    "..."
+  }
+}
+```
+
+#### `press_action`
+Emulates a user hotkey press. Injects a real `InputEventKey` into Godot's input pipeline via `Input.parse_input_event()`, so it flows through `_shortcut_input()` handlers exactly like a physical key press. Both press and release events are injected.
+
+**Params:**
+- `action` (string, required) — Action name from `list_actions` (e.g. `"toggle_orbits"`)
+
+**Result:** `{"ok": true, "action": "toggle_orbits"}`
+
+Note: Camera movement actions (e.g. `camera_up`) are designed for sustained key holds. An instant press+release has negligible effect — use `move_camera` for camera positioning instead.
+
 ## 5. Core API Dependencies
 
 The AssistantServer reads from and writes to these core objects:
