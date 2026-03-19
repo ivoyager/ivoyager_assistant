@@ -14,7 +14,8 @@ The Assistant plugin provides a programmatic interface to the I, Voyager simulat
 The plugin integrates via the Godot EditorPlugin system:
 
 - **EditorPlugin** — Registers `IVAssistantServer` as an autoload via `add_autoload_singleton()` when the plugin is enabled, and removes it when disabled.
-- **IVAssistantServer** — An autoload Node (root-level singleton). Reads config in `_ready()`, starts a TCP server on `core_initialized`, caches program references on `simulator_started`. Processes commands in `_process()` on the main thread.
+- **IVAssistantServer** — An autoload Node (root-level singleton). Reads config in `_ready()`, loads test suites, starts a TCP server on `core_initialized`, forwards lifecycle events to suites on `simulator_started`. Processes commands in `_process()` on the main thread.
+- **IVAssistantTestSuite** — RefCounted base class for test suites. Each suite registers method names and handles dispatch. Suites are loaded from the `[assistant_test_suites]` config section and can be added, replaced, or removed via override config files.
 
 ### 2.2 Component Diagram
 
@@ -23,23 +24,27 @@ EditorPlugin (editor/editor_plugin.gd)
   └─ _enter_tree(): reads ivoyager_assistant.cfg, calls add_autoload_singleton()
 
 IVAssistantServer (autoload Node, root-level singleton)
-  ├─ _ready(): reads config, checks enabled/debug_only, connects signals
-  ├─ on core_initialized: starts TCPServer on localhost:29071 (limited API)
-  ├─ on simulator_started: caches program references, enables full API
+  ├─ _ready(): reads config, loads test suites, checks enabled/debug_only, connects signals
+  ├─ on core_initialized: starts TCPServer on localhost:29071
+  ├─ on simulator_started: forwards to all test suites
   └─ _process(): polls TCP, reads JSON commands, dispatches, writes JSON responses
-	   ├─ reads from: IVGlobal, IVStateManager, IVCoreSettings, IVBody.bodies,
-	   │              SelectionManager, Timekeeper, SpeedManager, CameraHandler
-	   └─ writes to: SelectionManager, SpeedManager, Timekeeper, CameraHandler,
-					 IVStateManager (pause, start, quit)
+       ├─ built-in: get_project_info, get_state, start_game, quit
+       └─ delegates to test suites for all other methods
+
+IVAssistantTestSuite (RefCounted base class)
+  ├─ StateQuerySuite: get_time, get_selection, get_camera, list_bodies, body queries
+  ├─ ControlSuite: select_body, select_navigate, set_pause, set_speed, set_time,
+  │                move_camera, show_hide_gui, list_actions, press_action
+  └─ CoreTestSuite: screenshot, save_game, load_game, get_save_status
 ```
 
 ### 2.3 Lifecycle
 
 1. EditorPlugin registers `IVAssistantServer` as an autoload when the plugin is enabled
-2. On game start, `IVAssistantServer._ready()` reads config, checks `enabled`/`debug_only`, connects to `IVStateManager` signals
-3. On `core_initialized`: TCP server starts listening, IVSave plugin detected (if present). Only `get_project_info`, `get_state`, `get_save_status`, `start_game`, and `quit` are available
-4. On `simulator_started`: program references cached (SelectionManager, SpeedManager, etc.). All API methods become available
-5. On `about_to_free_procedural_nodes`: cached references cleared, sim-dependent methods return errors
+2. On game start, `IVAssistantServer._ready()` reads config, checks `enabled`/`debug_only`, loads test suites from `[assistant_test_suites]` config section, connects to `IVStateManager` signals
+3. On `core_initialized`: TCP server starts listening. Only built-in methods (`get_project_info`, `get_state`, `start_game`, `quit`) and test suite methods that don't require sim started (e.g. `get_save_status`) are available
+4. On `simulator_started`: forwarded to all test suites so they can cache program references. All API methods become available
+5. On `about_to_free_procedural_nodes`: forwarded to all test suites to clear references, sim-dependent methods return errors
 6. On `about_to_quit`: TCP server shuts down
 
 For projects with `wait_for_start = true` (splash screens), there is a gap between steps 3 and 4 during which the client can connect, query project info, and call `start_game` to bypass the splash screen.
@@ -516,6 +521,11 @@ The AssistantServer reads from and writes to these core objects:
 [assistant_autoload]
 IVAssistantServer="../assistant_server.gd"
 
+[assistant_test_suites]
+StateQuerySuite="res://addons/ivoyager_assistant/test_suites/state_query_suite.gd"
+ControlSuite="res://addons/ivoyager_assistant/test_suites/control_suite.gd"
+CoreTestSuite="res://addons/ivoyager_assistant/test_suites/core_test_suite.gd"
+
 [assistant]
 port=29071
 enabled=true
@@ -528,7 +538,46 @@ context_file=""
 
 The `[assistant_autoload]` section declares autoloads managed by the EditorPlugin. When the plugin is enabled in Godot's Plugin manager, `IVAssistantServer` is registered as an autoload. Projects can negate the autoload by setting `IVAssistantServer=""` in `ivoyager_override.cfg`.
 
-### 7.2 Runtime Settings
+### 7.2 Test Suites
+
+The `[assistant_test_suites]` section registers `IVAssistantTestSuite` subclasses that provide API methods to the server. Each entry maps a suite name to a GDScript file path. The server loads these at startup, calls `_init_test_suite()` on each, and builds a method dispatch table from their `get_method_names()` return values.
+
+**Default suites:**
+
+| Suite | Methods |
+|---|---|
+| `StateQuerySuite` | `get_time`, `get_selection`, `get_camera`, `list_bodies`, `get_body_info`, `get_body_position`, `get_body_orbit`, `get_body_distance`, `get_body_state_vectors` |
+| `ControlSuite` | `select_body`, `select_navigate`, `set_pause`, `set_speed`, `set_time`, `move_camera`, `show_hide_gui`, `list_actions`, `press_action` |
+| `CoreTestSuite` | `screenshot`, `save_game`, `load_game`, `get_save_status` |
+
+**Override examples** (in `ivoyager_override.cfg` or `ivoyager_override2.cfg`):
+
+```ini
+[assistant_test_suites]
+; Remove a suite entirely:
+CoreTestSuite=null
+
+; Replace a suite with a custom implementation:
+StateQuerySuite="res://custom/my_query_suite.gd"
+
+; Add a new suite alongside the defaults:
+MyProjectTests="res://tests/my_project_tests.gd"
+```
+
+Setting a suite to `null` or `""` removes it. Adding a new key registers a new suite. If two suites register the same method name, the last one loaded wins (with a warning).
+
+**Creating a custom test suite:**
+
+Extend `IVAssistantTestSuite` and override:
+- `get_method_names()` — Return the method names your suite handles
+- `get_capabilities()` — Return capability strings for `get_project_info`
+- `dispatch(method, params)` — Handle method calls, return result or `_error` dict
+- `requires_sim_started()` — Return `false` if some methods work before sim starts (default: `true`)
+- `_on_simulator_started()` / `_on_about_to_free()` — Cache/clear program references
+
+The suite receives the server node via `_init_test_suite(server)`. Use `_server.get_viewport()` for viewport access and `_server.parse_vector3()` / `_server.get_global_position()` for shared utilities.
+
+### 7.3 Runtime Settings
 
 The `[assistant]` section controls runtime behavior:
 
