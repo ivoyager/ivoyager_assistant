@@ -14,7 +14,8 @@ The Assistant plugin provides a programmatic interface to the I, Voyager simulat
 The plugin integrates via the Godot EditorPlugin system:
 
 - **EditorPlugin** — Registers `IVAssistantServer` as an autoload via `add_autoload_singleton()` when the plugin is enabled, and removes it when disabled.
-- **IVAssistantServer** — An autoload Node (root-level singleton). Reads config in `_ready()`, starts a TCP server on `core_initialized`, caches program references on `simulator_started`. Processes commands in `_process()` on the main thread.
+- **IVAssistantServer** — An autoload Node (root-level singleton). Reads config in `_ready()`, loads test suites, starts a TCP server on `core_initialized`, forwards lifecycle events to suites on `simulator_started`. Processes commands in `_process()` on the main thread.
+- **IVAssistantTestSuite** — RefCounted base class for test suites. Each suite registers method names and handles dispatch. Suites are loaded from the `[assistant_test_suites]` config section and can be added, replaced, or removed via override config files.
 
 ### 2.2 Component Diagram
 
@@ -23,23 +24,27 @@ EditorPlugin (editor/editor_plugin.gd)
   └─ _enter_tree(): reads ivoyager_assistant.cfg, calls add_autoload_singleton()
 
 IVAssistantServer (autoload Node, root-level singleton)
-  ├─ _ready(): reads config, checks enabled/debug_only, connects signals
-  ├─ on core_initialized: starts TCPServer on localhost:29071 (limited API)
-  ├─ on simulator_started: caches program references, enables full API
+  ├─ _ready(): reads config, loads test suites, checks enabled/debug_only, connects signals
+  ├─ on core_initialized: starts TCPServer on localhost:29071
+  ├─ on simulator_started: forwards to all test suites
   └─ _process(): polls TCP, reads JSON commands, dispatches, writes JSON responses
-	   ├─ reads from: IVGlobal, IVStateManager, IVCoreSettings, IVBody.bodies,
-	   │              SelectionManager, Timekeeper, SpeedManager, CameraHandler
-	   └─ writes to: SelectionManager, SpeedManager, Timekeeper, CameraHandler,
-					 IVStateManager (pause, start, quit)
+       ├─ built-in: get_project_info, get_state, start_game, quit
+       └─ delegates to test suites for all other methods
+
+IVAssistantTestSuite (RefCounted base class)
+  ├─ StateQuerySuite: get_time, get_selection, get_camera, list_bodies, body queries
+  ├─ ControlSuite: select_body, select_navigate, set_pause, set_speed, set_time,
+  │                move_camera, show_hide_gui, list_actions, press_action
+  └─ CoreTestSuite: screenshot, save_game, load_game, get_save_status
 ```
 
 ### 2.3 Lifecycle
 
 1. EditorPlugin registers `IVAssistantServer` as an autoload when the plugin is enabled
-2. On game start, `IVAssistantServer._ready()` reads config, checks `enabled`/`debug_only`, connects to `IVStateManager` signals
-3. On `core_initialized`: TCP server starts listening. Only `get_project_info`, `get_state`, `start_game`, and `quit` are available
-4. On `simulator_started`: program references cached (SelectionManager, SpeedManager, etc.). All API methods become available
-5. On `about_to_free_procedural_nodes`: cached references cleared, sim-dependent methods return errors
+2. On game start, `IVAssistantServer._ready()` reads config, checks `enabled`/`debug_only`, loads test suites from `[assistant_test_suites]` config section, connects to `IVStateManager` signals
+3. On `core_initialized`: TCP server starts listening. Only built-in methods (`get_project_info`, `get_state`, `start_game`, `quit`) and test suite methods that don't require sim started (e.g. `get_save_status`) are available
+4. On `simulator_started`: forwarded to all test suites so they can cache program references. All API methods become available
+5. On `about_to_free_procedural_nodes`: forwarded to all test suites to clear references, sim-dependent methods return errors
 6. On `about_to_quit`: TCP server shuts down
 
 For projects with `wait_for_start = true` (splash screens), there is a gap between steps 3 and 4 during which the client can connect, query project info, and call `start_game` to bypass the splash screen.
@@ -128,7 +133,7 @@ Start the simulation in projects with splash screens (`wait_for_start = true`). 
 ### 4.1 State Queries
 
 #### `get_state`
-Returns overall simulation state.
+Returns overall simulation state. If the Save plugin is present, includes `is_saving` and `is_loading` fields.
 
 **Params:** none
 
@@ -145,9 +150,13 @@ Returns overall simulation state.
   "clock": [14, 30, 0],
   "speed_index": 0,
   "speed_name": "1x",
-  "reversed_time": false
+  "reversed_time": false,
+  "is_saving": false,
+  "is_loading": false
 }
 ```
+
+`is_saving` and `is_loading` are only present when the IVSave plugin is enabled.
 
 #### `get_time`
 Returns detailed time information.
@@ -282,6 +291,24 @@ Returns distance between two bodies.
 }
 ```
 
+#### `get_body_state_vectors`
+Returns position and velocity vectors of a body relative to its parent.
+
+**Params:**
+- `name` (string, required)
+- `time` (float, optional) — TT J2000 seconds. Default: current simulation time.
+
+**Result:**
+```json
+{
+  "position": [1.496e11, 0.0, 0.0],
+  "velocity": [0.0, 2.978e4, 0.0],
+  "time": 7.889e8
+}
+```
+
+Note: Velocity computation is experimental (`@experimental` in IVOrbit).
+
 ### 4.3 Controls
 
 #### `select_body`
@@ -339,30 +366,128 @@ Move the camera to a target.
 
 **Result:** `{"ok": true}`
 
-### 4.4 GUI Control (Phase 4)
+### 4.4 GUI Control
 
 #### `show_hide_gui`
-Toggle GUI visibility.
+Show or hide all GUI panels. Emits `IVGlobal.show_hide_gui_requested` which is handled by `IVShowHideUI`.
 
 **Params:**
-- `visible` (bool, required)
+- `visible` (bool, required) — true to show, false to hide
 
-#### `set_option`
+**Result:** `{"ok": true, "visible": true}`
+
+#### `set_option` (Phase 4)
 Change a user setting.
 
 **Params:**
 - `setting` (string, required) — Setting name
 - `value` (variant, required) — New value
 
-### 4.5 Testing Utilities
+### 4.5 Save/Load (requires IVSave plugin)
 
-#### `screenshot`
-Capture viewport to a file.
+These methods are only available when the `ivoyager_save` plugin is present and enabled. They appear in `get_project_info` capabilities only when detected. If called without the plugin, they return error code 5 ("Save plugin not available").
+
+Save and load operations are **asynchronous**. The methods return `{"ok": true}` immediately. Poll `get_state` to detect completion via the `is_saving` / `is_loading` fields.
+
+#### `save_game`
+Trigger a save operation. Requires simulator started.
 
 **Params:**
-- `path` (string, required) — Output file path (PNG)
+- `type` (string, optional, default `"quicksave"`) — One of `"quicksave"`, `"named"`, or `"autosave"`
+- `path` (string, optional) — File path for `"named"` saves. If omitted for `"named"`, requests a dialog (not useful for automated testing)
 
-**Result:** `{"ok": true, "path": "/tmp/screenshot.png"}`
+**Result:** `{"ok": true}`
+
+**Example:**
+```json
+{"id": 1, "method": "save_game", "params": {}}
+{"id": 1, "method": "save_game", "params": {"type": "quicksave"}}
+{"id": 1, "method": "save_game", "params": {"type": "named", "path": "C:/saves/test.MyProjectSave"}}
+```
+
+#### `load_game`
+Trigger a load operation. Requires simulator started.
+
+**Params:**
+- `path` (string, optional) — Specific save file to load. If omitted, loads the most recently modified save file (quickload)
+
+**Result:** `{"ok": true}`
+
+During load, `_sim_started` transitions to `false` and back to `true`. Most other methods return error code 4 during this window. Poll `get_state` (always available) until `started` is `true` and `is_loading` is `false`.
+
+**Example:**
+```json
+{"id": 1, "method": "load_game", "params": {}}
+{"id": 1, "method": "load_game", "params": {"path": "C:/saves/test.MyProjectSave"}}
+```
+
+#### `get_save_status`
+Query save/load status and file information. Available before simulator starts.
+
+**Params:** none
+
+**Result:**
+```json
+{
+  "is_saving": false,
+  "is_loading": false,
+  "directory": "C:/Users/user/AppData/Roaming/Godot/app_userdata/ProjectName/saves",
+  "has_saves": true,
+  "last_modified_path": "C:/Users/.../saves/Quicksave_2026-01-01_12.00.00.MyProjectSave",
+  "file_extension": "MyProjectSave"
+}
+```
+
+### 4.6 Testing Utilities
+
+#### `screenshot`
+Capture viewport to a PNG file. Optionally hides GUI before capture and restores it after.
+
+**Params:**
+- `path` (string, required) — Output file path (must be a valid writable path)
+- `hide_gui` (bool, optional, default false) — Temporarily hide GUI, force a synchronous render, capture, then restore GUI
+
+**Result:**
+```json
+{
+  "ok": true,
+  "path": "C:/tmp/screenshot.png",
+  "size": [1920, 1080]
+}
+```
+
+When `hide_gui` is true, the method hides the GUI via `IVGlobal.show_hide_gui_requested`, calls `RenderingServer.force_draw(true)` to synchronously render a frame without GUI, captures, then restores GUI visibility. Alternatively, call `show_hide_gui` separately before `screenshot` — the per-frame TCP processing naturally inserts a render between requests.
+
+### 4.7 Action Emulation
+
+#### `list_actions`
+Returns all registered input actions with their display names. Actions are defined by `IVInputMapManager` and include display toggles, camera controls, selection navigation, time controls, and administrative actions.
+
+**Params:** none
+
+**Result:**
+```json
+{
+  "actions": {
+    "toggle_orbits": "Show/Hide Orbits",
+    "toggle_names": "Show/Hide Names",
+    "toggle_symbols": "Show/Hide Symbols",
+    "toggle_pause": "Toggle Pause",
+    "recenter": "Recenter",
+    "..."
+  }
+}
+```
+
+#### `press_action`
+Emulates a user hotkey press. Injects a real `InputEventKey` into Godot's input pipeline via `Input.parse_input_event()`, so it flows through `_shortcut_input()` handlers exactly like a physical key press. Both press and release events are injected.
+
+**Params:**
+- `action` (string, required) — Action name from `list_actions` (e.g. `"toggle_orbits"`)
+
+**Result:** `{"ok": true, "action": "toggle_orbits"}`
+
+Note: Camera movement actions (e.g. `camera_up`) are designed for sustained key holds. An instant press+release has negligible effect — use `move_camera` for camera positioning instead.
 
 ## 5. Core API Dependencies
 
@@ -379,6 +504,7 @@ The AssistantServer reads from and writes to these core objects:
 | `SpeedManager` | Via `IVGlobal.program[&"SpeedManager"]` | Speed index, `change_speed()` |
 | `Timekeeper` | Via `IVGlobal.program[&"Timekeeper"]` | Time queries and `set_time()` |
 | `CameraHandler` | Via `IVGlobal.program[&"CameraHandler"]` | Camera state and `move_to()` |
+| `IVSave` | Autoload singleton (optional) | Save/load operations, save status queries (duck-typed) |
 
 ## 6. Threading and Safety
 
@@ -395,6 +521,11 @@ The AssistantServer reads from and writes to these core objects:
 [assistant_autoload]
 IVAssistantServer="../assistant_server.gd"
 
+[assistant_test_suites]
+StateQuerySuite="res://addons/ivoyager_assistant/test_suites/state_query_suite.gd"
+ControlSuite="res://addons/ivoyager_assistant/test_suites/control_suite.gd"
+CoreTestSuite="res://addons/ivoyager_assistant/test_suites/core_test_suite.gd"
+
 [assistant]
 port=29071
 enabled=true
@@ -407,7 +538,46 @@ context_file=""
 
 The `[assistant_autoload]` section declares autoloads managed by the EditorPlugin. When the plugin is enabled in Godot's Plugin manager, `IVAssistantServer` is registered as an autoload. Projects can negate the autoload by setting `IVAssistantServer=""` in `ivoyager_override.cfg`.
 
-### 7.2 Runtime Settings
+### 7.2 Test Suites
+
+The `[assistant_test_suites]` section registers `IVAssistantTestSuite` subclasses that provide API methods to the server. Each entry maps a suite name to a GDScript file path. The server loads these at startup, calls `_init_test_suite()` on each, and builds a method dispatch table from their `get_method_names()` return values.
+
+**Default suites:**
+
+| Suite | Methods |
+|---|---|
+| `StateQuerySuite` | `get_time`, `get_selection`, `get_camera`, `list_bodies`, `get_body_info`, `get_body_position`, `get_body_orbit`, `get_body_distance`, `get_body_state_vectors` |
+| `ControlSuite` | `select_body`, `select_navigate`, `set_pause`, `set_speed`, `set_time`, `move_camera`, `show_hide_gui`, `list_actions`, `press_action` |
+| `CoreTestSuite` | `screenshot`, `save_game`, `load_game`, `get_save_status` |
+
+**Override examples** (in `ivoyager_override.cfg` or `ivoyager_override2.cfg`):
+
+```ini
+[assistant_test_suites]
+; Remove a suite entirely:
+CoreTestSuite=null
+
+; Replace a suite with a custom implementation:
+StateQuerySuite="res://custom/my_query_suite.gd"
+
+; Add a new suite alongside the defaults:
+MyProjectTests="res://tests/my_project_tests.gd"
+```
+
+Setting a suite to `null` or `""` removes it. Adding a new key registers a new suite. If two suites register the same method name, the last one loaded wins (with a warning).
+
+**Creating a custom test suite:**
+
+Extend `IVAssistantTestSuite` and override:
+- `get_method_names()` — Return the method names your suite handles
+- `get_capabilities()` — Return capability strings for `get_project_info`
+- `dispatch(method, params)` — Handle method calls, return result or `_error` dict
+- `requires_sim_started()` — Return `false` if some methods work before sim starts (default: `true`)
+- `_on_simulator_started()` / `_on_about_to_free()` — Cache/clear program references
+
+The suite receives the server node via `_init_test_suite(server)`. Use `_server.get_viewport()` for viewport access and `_server.parse_vector3()` / `_server.get_global_position()` for shared utilities.
+
+### 7.3 Runtime Settings
 
 The `[assistant]` section controls runtime behavior:
 
@@ -430,6 +600,7 @@ Not all projects support all features. The `capabilities` array returned by `get
 - **Program objects**: Methods requiring `TopUI`, `CameraHandler`, `SpeedManager`, or `Timekeeper` are only listed if those objects are registered.
 - **Settings**: `set_time` requires `IVCoreSettings.allow_time_setting == true`.
 - **Project type**: `start_game` is only listed for projects with `IVCoreSettings.wait_for_start == true`.
+- **Plugins**: `save_game`, `load_game`, and `get_save_status` are only listed when the `ivoyager_save` plugin is present.
 
 Methods not in the capabilities list will return appropriate error codes (ERR_NOT_STARTED or ERR_NOT_ALLOWED) if called.
 

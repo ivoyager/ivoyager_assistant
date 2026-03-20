@@ -137,19 +137,75 @@ Updated SPECIFICATION.md with new lifecycle, methods, config keys, and cross-pro
 
 ---
 
-## Phase 3: Testing Framework
+## Phase 3: Testing Framework ✓
 
 **Goal:** Add utilities specifically designed for automated test scenarios.
 
-### Step 3.1: Screenshot Capture
+### Step 3.1: GUI Visibility (pulled forward from Phase 4) ✓
+
+- **`show_hide_gui`** — Emit `IVGlobal.show_hide_gui_requested`. Prerequisite for clean screenshots.
+
+### Step 3.2: Screenshot Capture ✓
 
 - **`screenshot`** — `get_viewport().get_texture().get_image().save_png(path)`
-- Returns file path for Claude Code to read via the Read tool
+- Returns file path and image size for Claude Code to read via the Read tool
+- Optional `hide_gui` parameter: temporarily hides GUI, forces a synchronous render via `RenderingServer.force_draw(true)`, captures, then restores GUI
 
-### Step 3.2: Validation Helpers
+### Step 3.3: State Vectors ✓
 
-- **`get_body_state_vectors`** — Returns both position and velocity vectors
-- Bulk query methods for testing orbital mechanics across multiple bodies
+- **`get_body_state_vectors`** — Returns both position and velocity vectors relative to parent via `IVBody.get_state_vectors(time)`
+
+### Step 3.4: Test Window Resolution ✓
+
+- Updated CLAUDE.md launch command from `--resolution 800x600` to `--resolution 1920x1080` to give GUI panels proper room and produce meaningful screenshots
+
+---
+
+## Phase 3b: Action Emulation ✓
+
+**Goal:** Emulate user hotkey actions programmatically, giving the Assistant access to all user-facing actions without dedicated API methods for each.
+
+### Step 3b.1: List Actions ✓
+
+- **`list_actions`** — Returns all registered input actions from `IVInputMapManager.defaults` with display names from `action_texts`
+
+### Step 3b.2: Press Action ✓
+
+- **`press_action`** — Injects a real `InputEventKey` into Godot's input pipeline via `Input.parse_input_event()`. Gets the action's registered keybinding from `InputMap.action_get_events()`, duplicates it, and injects press + release events. Flows through `_shortcut_input()` handlers exactly like a real key press.
+
+---
+
+## Phase 3c: Modular Test Suite Architecture ✓
+
+**Goal:** Extract all API methods from `assistant_server.gd` into configurable test suite classes, enabling projects to add, replace, or remove entire suites of methods via `ivoyager_override.cfg`.
+
+### Step 3c.1: Base Class ✓
+
+- **`IVAssistantTestSuite`** (`assistant_test_suite.gd`) — RefCounted base class with error constants, lifecycle hooks (`_init_test_suite`, `_on_simulator_started`, `_on_about_to_free`), and virtual methods (`get_method_names`, `get_capabilities`, `requires_sim_started`, `dispatch`)
+
+### Step 3c.2: Extract State Queries ✓
+
+- **`StateQuerySuite`** (`test_suites/state_query_suite.gd`) — `get_time`, `get_selection`, `get_camera`, `list_bodies`, `get_body_info`, `get_body_position`, `get_body_orbit`, `get_body_distance`, `get_body_state_vectors`
+
+### Step 3c.3: Extract Controls ✓
+
+- **`ControlSuite`** (`test_suites/control_suite.gd`) — `select_body`, `select_navigate`, `set_pause`, `set_speed`, `set_time`, `move_camera`, `show_hide_gui`, `list_actions`, `press_action`
+
+### Step 3c.4: Extract Testing Utilities ✓
+
+- **`CoreTestSuite`** (`test_suites/core_test_suite.gd`) — `screenshot`, `save_game`, `load_game`, `get_save_status`. Returns `requires_sim_started() == false` since `get_save_status` works pre-sim.
+
+### Step 3c.5: Refactor Server ✓
+
+- `assistant_server.gd` reduced to TCP infrastructure + 4 built-in methods (`get_project_info`, `get_state`, `start_game`, `quit`)
+- Suite loading from `[assistant_test_suites]` config section
+- Dispatch delegates to `_method_to_suite` lookup, with `requires_sim_started()` check
+- Utility methods promoted to public: `parse_vector3()`, `get_global_position()`
+
+### Step 3c.6: Config and Documentation ✓
+
+- Added `[assistant_test_suites]` section to `ivoyager_assistant.cfg`
+- Updated SPECIFICATION.md with section 7.2 documenting the test suite system, override examples, and custom suite creation guide
 
 ---
 
@@ -157,9 +213,8 @@ Updated SPECIFICATION.md with new lifecycle, methods, config keys, and cross-pro
 
 **Goal:** Enable programmatic control of all GUI elements.
 
-### Step 4.1: GUI Visibility
+### Step 4.1: GUI State
 
-- **`show_hide_gui`** — Emit `IVGlobal.show_hide_gui_requested`
 - **`get_gui_state`** — Report visibility of panels
 
 ### Step 4.2: Settings and Options
