@@ -130,6 +130,16 @@ Start the simulation in projects with splash screens (`wait_for_start = true`). 
 
 **Result:** `{"ok": true}`
 
+#### `quit`
+Shut down the application.
+
+**Params:**
+- `force` (bool, optional, default `false`) — If `true`, quit immediately without confirmation dialog. If `false`, may trigger a "Quit without saving?" dialog in projects that use one.
+
+**Result:** `{"ok": true}`
+
+Note: Response is sent before quit executes (via `call_deferred`).
+
 ### 4.1 State Queries
 
 #### `get_state`
@@ -617,3 +627,39 @@ Projects with `wait_for_start = true` display a splash screen before starting th
 Projects can customize the assistant's identity via config:
 - `assistant_name` — Gives the assistant a project-specific name
 - `context_file` — Points to a text file with background information, personality guidelines, or project-specific instructions for AI clients
+
+## 9. Generic Test Sequence
+
+This section describes how to launch, connect, and run the generic tests that the Assistant plugin provides. These tests verify basic simulation functionality and work across all I, Voyager projects with the plugin enabled.
+
+### 9.1 Launch
+
+Run the Godot project from the command line in debug mode. Portable Godot executables are in the parent directory of the project (`../`). Use the most recent `*_console.exe` (sort by version) with `--path` pointing to the project directory:
+
+```
+../Godot_v4.6.1-stable_win64_console.exe --path .
+```
+
+The console variant outputs to stdout/stderr, which is useful for observing errors during testing.
+
+### 9.2 Connect
+
+Connect via TCP to `127.0.0.1:29071`. The server starts listening on `core_initialized`, which may take a few seconds after launch. Retry the connection with a short delay (e.g., 2 seconds) if refused.
+
+### 9.3 Test Steps
+
+Execute these steps in order:
+
+1. **Discover capabilities:** Call `get_project_info`. Check `wait_for_start`, `started`, and `capabilities` in the response.
+2. **Start the simulation:** If `wait_for_start` is `true` and `started` is `false`, call `start_game`. Then poll `get_state` until `started` is `true`.
+3. **Verify state:** Call `get_state`, `get_time`, `get_selection`, `get_camera` and confirm reasonable values.
+4. **Exercise controls:** Call `select_body` (e.g., `{"name": "PLANET_MARS"}`), `move_camera` (e.g., `{"target": "PLANET_EARTH", "instant": true}`), `set_pause`, `set_speed`.
+5. **Save/load cycle** (if `save_game` and `load_game` are in capabilities): Call `save_game`, then poll `get_state` until `is_saving` is `false`. Call `load_game`, then poll `get_state` until `is_loading` is `false` and `started` is `true`.
+6. **Quit:** Call `quit` with `{"force": true}` to shut down without a confirmation dialog.
+
+### 9.4 Key Notes
+
+- **Async save/load:** `save_game` and `load_game` return `{"ok": true}` immediately. Poll `get_state` to check `is_saving`/`is_loading` for completion. During load, most methods return error code 4 — only `get_state` and `get_save_status` remain available.
+- **Error code 4 (simulator not started):** If received, poll `get_state` and retry after `started` is `true`. This occurs before `start_game` completes and during load operations.
+- **Per-frame processing:** Commands are processed once per frame (~60 Hz). Between a request and its response, at least one game frame passes.
+- **Capabilities are authoritative:** Only call methods listed in the `capabilities` array from `get_project_info`. Missing capabilities indicate the project lacks the required program objects or plugins.
