@@ -499,6 +499,79 @@ Emulates a user hotkey press. Injects a real `InputEventKey` into Godot's input 
 
 Note: Camera movement actions (e.g. `camera_up`) are designed for sustained key holds. An instant press+release has negligible effect — use `move_camera` for camera positioning instead.
 
+### 4.8 GUI Inspection
+
+Generic scene tree inspection methods that work on any GUI node without per-widget custom code. Available before simulator starts. Capability: `gui_inspection`.
+
+#### `find_nodes`
+Discover nodes by class, script class_name, or name pattern.
+
+**Params (at least one required):**
+- `class` (string, optional) — Godot built-in class name (e.g., `"TabContainer"`)
+- `script_class` (string, optional) — GDScript `class_name` (e.g., `"MyCustomPanel"`)
+- `name_pattern` (string, optional) — Glob match on node name (e.g., `"*Panel*"`)
+- `root` (string, optional) — Node path to search from (default: `"/root"`)
+
+**Result (example):**
+```json
+{
+  "nodes": [
+    {"path": "/root/Universe/TopUI/.../MyPanel", "class": "MarginContainer", "script_class": "MyCustomPanel", "name": "MyPanel", "visible": true}
+  ],
+  "count": 1
+}
+```
+
+Capped at 50 results.
+
+#### `inspect_node`
+Return a node's type, key properties, and children to a configurable depth.
+
+**Params:**
+- `path` (string, required) — Node path from `find_nodes`
+- `depth` (int, optional, default 2) — Levels of children to include
+
+**Result:** Nested dictionary tree. Each node includes `name`, `class`, `visible`. Class-specific properties are included automatically: `text` for Labels, `current_tab`/`tab_names` for TabContainers, `title`/`folded` for FoldableContainers.
+
+#### `read_node_text`
+Recursively harvest all visible text content from a subtree in document order. This is the primary method for verifying that a GUI widget displays sensible output.
+
+**Params:**
+- `path` (string, required) — Node path to walk
+- `max_labels` (int, optional, default 200) — Maximum entries to return
+
+**Result (example):**
+```json
+{
+  "path": "/root/.../MyPanel",
+  "entries": [
+    {"type": "tab_container", "name": "TabContainer", "current_tab": 0, "tab_names": ["Tab1", "Tab2"]},
+    {"type": "section", "title": "Section A", "folded": true},
+    {"type": "section", "title": "Section B", "folded": false},
+    {"type": "label", "name": "value_label", "text": "85"},
+    {"type": "label", "name": "rate_label", "text": "2.5"}
+  ],
+  "count": 5,
+  "truncated": false
+}
+```
+
+**Behavior:**
+- Skips invisible nodes entirely
+- For TabContainers, only recurses the active tab
+- For FoldableContainers, skips folded sections
+- Stops at `max_labels` entries, sets `truncated: true`
+
+**Timing note:** Some projects populate GUI content asynchronously (e.g., via deferred calls or background threads). `read_node_text` reads the current display state — it does not trigger or wait for updates. If labels are empty, the data may not yet have populated. Callers should ensure the relevant GUI is active and data has had time to load (e.g., navigate with `select_body`, wait ~2 seconds, then inspect).
+
+**Recommended AI workflow** for "test X for sensible output":
+1. `get_state` — confirm simulator running
+2. `select_body` — navigate to entity with data
+3. Wait ~2 seconds for data population
+4. `find_nodes` with `script_class` — discover the node path
+5. `read_node_text` with that path — harvest visible text
+6. Analyze entries for non-empty values, reasonable numeric ranges, correct section titles
+
 ## 5. Core API Dependencies
 
 The AssistantServer reads from and writes to these core objects:
