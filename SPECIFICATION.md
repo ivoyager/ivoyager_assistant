@@ -657,6 +657,19 @@ Execute these steps in order:
 5. **Save/load cycle** (if `save_game` and `load_game` are in capabilities): Call `save_game`, then poll `get_state` until `is_saving` is `false`. Call `load_game`, then poll `get_state` until `is_loading` is `false` and `started` is `true`.
 6. **Quit:** Call `quit` with `{"force": true}` to shut down without a confirmation dialog.
 
+### 9.3.1 Automated Test Runner
+
+The file `tools/assistant_test.py` implements the full test sequence above as an automated Python script. It requires Python 3 (stdlib only, no dependencies). Usage:
+
+```
+python tools/assistant_test.py                  # game already running on port 29071
+python tools/assistant_test.py --launch         # start Godot automatically, then test
+python tools/assistant_test.py --skip-save      # skip the save/load cycle
+python tools/assistant_test.py --port 29072     # custom port
+```
+
+The script is capability-aware: it checks the `capabilities` array from `get_project_info` and skips tests for features the project does not support. Exit code is 0 on success, 1 on failure.
+
 ### 9.4 Key Notes
 
 - **Async save/load:** `save_game` and `load_game` return `{"ok": true}` immediately. Poll `get_state` to check `is_saving`/`is_loading` for completion. During load, most methods return error code 4 — only `get_state` and `get_save_status` remain available.
