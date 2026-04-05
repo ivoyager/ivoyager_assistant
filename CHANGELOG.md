@@ -29,3 +29,4 @@ Under development using Godot 4.6.1.
 * State vectors: `get_body_state_vectors` returns position and velocity vectors for orbital mechanics testing.
 * Action emulation: `press_action` injects real `InputEventKey` events into Godot's input pipeline, enabling programmatic triggering of any user hotkey action.
 * Action listing: `list_actions` returns all registered input actions with display names from `IVInputMapManager`.
+* Automated test runner: `tools/assistant_test.py` implements the full generic test sequence (SPECIFICATION.md section 9.3) as a Python script. Capability-aware, skips unsupported features. Supports `--launch`, `--skip-save`, `--host`, `--port` options.
