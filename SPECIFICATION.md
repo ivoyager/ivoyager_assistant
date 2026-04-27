@@ -43,9 +43,10 @@ IVAssistantTestSuite (RefCounted base class)
 1. EditorPlugin registers `IVAssistantServer` as an autoload when the plugin is enabled
 2. On game start, `IVAssistantServer._ready()` reads config, checks `enabled`/`debug_only`, loads test suites from `[assistant_test_suites]` config section, connects to `IVStateManager` signals
 3. On `core_initialized`: TCP server starts listening. Only built-in methods (`get_project_info`, `get_state`, `start_game`, `quit`) and test suite methods that don't require sim started (e.g. `get_save_status`) are available
-4. On `simulator_started`: forwarded to all test suites so they can cache program references. All API methods become available
-5. On `about_to_free_procedural_nodes`: forwarded to all test suites to clear references, sim-dependent methods return errors
-6. On `about_to_quit`: TCP server shuts down
+4. On `simulator_started`: forwarded to all test suites so they can cache program references. The readiness gate begins evaluating each frame.
+5. **Readiness gate opens** after the project-supplied `ready_predicate` (default trivially true) has returned `true` for `min_ready_delay_frames` consecutive frames (default 10). Sim-gated API methods become available only at this point. See §7.3 and §7.4.
+6. On `about_to_free_procedural_nodes`: forwarded to all test suites to clear references, sim-dependent methods return errors. The readiness gate re-arms (closes until the next `simulator_started` plus delay).
+7. On `about_to_quit`: TCP server shuts down
 
 For projects with `wait_for_start = true` (splash screens), there is a gap between steps 3 and 4 during which the client can connect, query project info, and call `start_game` to bypass the splash screen.
 
@@ -92,7 +93,7 @@ Newline-delimited JSON. Each message is a single line terminated by `\n`.
 | 1 | Unknown method |
 | 2 | Invalid parameters |
 | 3 | Body not found |
-| 4 | Simulator not started |
+| 4 | Simulator not ready (not started, or readiness gate not yet open) |
 | 5 | Operation not allowed |
 | 6 | Timeout |
 
@@ -423,7 +424,7 @@ Trigger a load operation. Requires simulator started.
 
 **Result:** `{"ok": true}`
 
-During load, `_sim_started` transitions to `false` and back to `true`. Most other methods return error code 4 during this window. Poll `get_state` (always available) until `started` is `true` and `is_loading` is `false`.
+During load, the readiness gate closes (on `about_to_free_procedural_nodes`) and re-opens after the next `simulator_started` plus `min_ready_delay_frames` frames of the project's `ready_predicate` returning `true` (see §7.3, §7.4). Sim-gated methods (including `save_game` and `load_game`) return error code 4 during this window. Poll `get_state` (always available) until `started` is `true` and `is_loading` is `false`, then allow a brief settling period before re-issuing sim-gated calls — or simply retry on error code 4.
 
 **Example:**
 ```json
@@ -669,8 +670,24 @@ The `[assistant]` section controls runtime behavior:
 - `debug_only` — If true, server only starts when `OS.is_debug_build()` is true (default: true)
 - `assistant_name` — Display name for the assistant persona (default: empty, uses project name from ProjectSettings)
 - `context_file` — Path to a text file (`res://` relative) with project-specific context for AI clients (default: empty)
+- `min_ready_delay_frames` — Number of consecutive frames the project's `ready_predicate` must return `true` (after `simulator_started`) before sim-gated methods become available (default: 10). Allows projects with deferred main-thread work after `simulator_started` (e.g. cross-thread initialization arriving via `call_deferred`) to settle before save/load and similar operations are permitted. See §7.4.
 
 Base values in `ivoyager_assistant.cfg` can be overridden per-project via `ivoyager_override.cfg` or `ivoyager_override2.cfg`.
+
+### 7.4 Project-supplied readiness predicate
+
+Projects with cross-thread or deferred initialization that continues past `simulator_started` can supply a readiness predicate that the server polls each frame:
+
+```gdscript
+IVAssistantServer.ready_predicate = func() -> bool:
+    return MyProject.is_initialization_complete
+```
+
+The readiness gate stays closed until the predicate has returned `true` for `min_ready_delay_frames` consecutive frames (counted from the first frame the predicate returns `true`, not from `simulator_started`). If the predicate flips back to `false` while counting, the countdown resets. Once the gate has opened, it stays open until reset by `IVStateManager.about_to_free_procedural_nodes` (e.g. during a load).
+
+The default predicate is trivially `true`, so projects that don't set `ready_predicate` get only the `min_ready_delay_frames` buffer after `simulator_started`.
+
+Test suites that opt out of the suite-wide gate (`requires_sim_started()` returns `false`) can still consult the gate per-method via `IVAssistantServer.is_ready()`. The bundled `CoreTestSuite` uses this for `save_game` and `load_game` so save/load races against deferred initialization are blocked even when the suite handles other methods (e.g. `get_save_status`) pre-simulator.
 
 ## 8. Cross-Project Compatibility
 
@@ -746,6 +763,6 @@ The script is capability-aware: it checks the `capabilities` array from `get_pro
 ### 9.4 Key Notes
 
 - **Async save/load:** `save_game` and `load_game` return `{"ok": true}` immediately. Poll `get_state` to check `is_saving`/`is_loading` for completion. During load, most methods return error code 4 — only `get_state` and `get_save_status` remain available.
-- **Error code 4 (simulator not started):** If received, poll `get_state` and retry after `started` is `true`. This occurs before `start_game` completes and during load operations.
+- **Error code 4 (simulator not ready):** If received, poll `get_state` and retry. This occurs before `start_game` completes, during load operations, and during the readiness-gate delay after `simulator_started` (default 10 frames; longer if the project supplies a `ready_predicate`). Note that `started == true` is necessary but not sufficient — sim-gated methods may briefly continue to return error 4 after `started` flips true while the readiness gate is still closing its delay window. Simply retry on error 4.
 - **Per-frame processing:** Commands are processed once per frame (~60 Hz). Between a request and its response, at least one game frame passes.
 - **Capabilities are authoritative:** Only call methods listed in the `capabilities` array from `get_project_info`. Missing capabilities indicate the project lacks the required program objects or plugins.

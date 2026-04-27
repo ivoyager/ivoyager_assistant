@@ -41,6 +41,16 @@ var _assistant_name: String
 var _context_content: String
 var _listening := false # TCP server is active
 var _sim_started := false # simulator has started, program references cached
+var _is_ready := false # readiness gate is open
+var _ready_delay_counter := -1 # -1 = predicate not yet true; 0..N = countdown
+var _min_ready_delay_frames := 10
+
+## Project-supplied readiness condition. Polled each frame after
+## [signal IVStateManager.simulator_started] fires; the readiness gate opens
+## after this returns true for [member _min_ready_delay_frames] consecutive
+## frames. Default predicate is trivially true (gate opens after the frame
+## delay alone). See SPECIFICATION.md §7.4.
+var ready_predicate := func() -> bool: return true
 
 # Test suite infrastructure
 var _test_suites: Array[IVAssistantTestSuite] = []
@@ -63,6 +73,7 @@ func _ready() -> void:
 		return
 	_port = config.get_value("assistant", "port", 29071)
 	_assistant_name = config.get_value("assistant", "assistant_name", "")
+	_min_ready_delay_frames = config.get_value("assistant", "min_ready_delay_frames", 10)
 	var context_file: String = config.get_value("assistant", "context_file", "")
 	if context_file:
 		_context_content = _load_context_file(context_file)
@@ -95,8 +106,19 @@ func _on_about_to_quit() -> void:
 
 func _on_about_to_free() -> void:
 	_sim_started = false
+	_is_ready = false
+	_ready_delay_counter = -1
 	for suite in _test_suites:
 		suite._on_about_to_free()
+
+
+## Whether the readiness gate is open. True after [signal IVStateManager.simulator_started]
+## has fired AND [member ready_predicate] has returned true for
+## [member _min_ready_delay_frames] consecutive frames. Test suites can call
+## this for per-method gating where suite-level [method IVAssistantTestSuite.requires_sim_started]
+## is too coarse.
+func is_ready() -> bool:
+	return _is_ready
 
 
 func _shutdown() -> void:
@@ -109,11 +131,26 @@ func _shutdown() -> void:
 	_buffers.clear()
 	_listening = false
 	_sim_started = false
+	_is_ready = false
+	_ready_delay_counter = -1
 
 
 func _process(_delta: float) -> void:
 	if !_listening:
 		return
+
+	# Evaluate readiness gate. Once flipped, stays flipped until reset by
+	# _on_about_to_free or _shutdown.
+	if _sim_started and !_is_ready:
+		if ready_predicate.call():
+			if _ready_delay_counter < 0:
+				_ready_delay_counter = 0
+			elif _ready_delay_counter >= _min_ready_delay_frames:
+				_is_ready = true
+			else:
+				_ready_delay_counter += 1
+		else:
+			_ready_delay_counter = -1
 
 	# Accept new connections
 	while _tcp_server.is_connection_available():
@@ -238,9 +275,9 @@ func _dispatch(method: String, params: Dictionary) -> Variant:
 	# Delegate to test suites
 	var suite: IVAssistantTestSuite = _method_to_suite.get(method)
 	if suite:
-		if suite.requires_sim_started() and !_sim_started:
+		if suite.requires_sim_started() and !_is_ready:
 			return {"_error": {"code": ERR_NOT_STARTED,
-					"message": "Simulator not started"}}
+					"message": "Simulator not ready"}}
 		return suite.dispatch(method, params)
 
 	return {"_error": {"code": ERR_UNKNOWN_METHOD,
