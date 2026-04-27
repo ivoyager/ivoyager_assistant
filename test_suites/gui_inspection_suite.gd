@@ -24,8 +24,13 @@ extends IVAssistantTestSuite
 ## Provides scene tree discovery and content harvesting that works on any GUI
 ## node without per-widget custom code. See SPECIFICATION.md section 4.8.
 
+## Maximum number of nodes returned by [code]find_nodes[/code].
 const MAX_FIND_RESULTS := 50
+## Default child-tree depth for [code]inspect_node[/code] when [code]depth[/code]
+## is not specified.
 const DEFAULT_INSPECT_DEPTH := 2
+## Default cap on text entries collected by [code]read_node_text[/code] when
+## [code]max_labels[/code] is not specified.
 const DEFAULT_MAX_LABELS := 200
 
 

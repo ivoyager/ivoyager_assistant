@@ -78,6 +78,9 @@ func dispatch(_method: String, _params: Dictionary) -> Variant:
 # Static utilities for use by test suites
 # ===========================================================================
 
+## Parses a 3-element numeric array from a JSON-RPC param into a [Vector3].
+## Returns the [Vector3] on success or an [code]_error[/code] [Dictionary] on
+## failure. [param param_name] is used in error messages.
 static func parse_vector3(value: Variant, param_name: String) -> Variant:
 	if typeof(value) != TYPE_ARRAY:
 		return {"_error": {"code": ERR_INVALID_PARAMS,
@@ -96,6 +99,8 @@ static func parse_vector3(value: Variant, param_name: String) -> Variant:
 	return Vector3(x, y, z)
 
 
+## Returns [param body]'s position summed up the parent chain at [param time]
+## (in heliocentric coordinates for solar-system bodies).
 static func get_global_position(body: IVBody, time: float) -> Vector3:
 	var pos := Vector3.ZERO
 	var current: IVBody = body
