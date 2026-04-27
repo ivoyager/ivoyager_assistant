@@ -31,3 +31,6 @@ Under development using Godot 4.6.1.
 * Action listing: `list_actions` returns all registered input actions with display names from `IVInputMapManager`.
 * Automated test runner: `tools/assistant_test.py` implements the full generic test sequence (SPECIFICATION.md section 9.3) as a Python script. Capability-aware, skips unsupported features. Supports `--launch`, `--skip-save`, `--host`, `--port` options.
 * Readiness gate after `simulator_started`: sim-gated TCP methods now wait `min_ready_delay_frames` consecutive frames (default 10) of `ready_predicate` returning true before becoming available. Default predicate is trivially true, so the default behavior adds only a ~10-frame buffer after `simulator_started`. Projects with deferred main-thread initialization that continues past `simulator_started` (e.g. cross-thread arrival of game-state objects via `call_deferred`) can supply a `ready_predicate: Callable` to gate the server until their state has settled. New `IVAssistantServer.is_ready()` getter exposes the gate state to test suites that opt out of the suite-wide gate (e.g. `CoreTestSuite`); `save_game` and `load_game` now use this getter instead of `IVStateManager.started` directly. Gate re-arms across save/load cycles via the existing `about_to_free_procedural_nodes` reset.
+
+### Changed
+* Completed doc comments in all files.

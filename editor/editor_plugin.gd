@@ -20,10 +20,15 @@
 @tool
 extends EditorPlugin
 
-# This file registers autoloads for the assistant plugin. If you modify
-# autoloads in ivoyager_assistant.cfg or ivoyager_override.cfg, you'll need to
-# disable and re-enable the plugin for changes to take effect.
+## EditorPlugin that registers autoloads for the I, Voyager Assistant plugin.
+##
+## Reads autoload entries from
+## [code]res://addons/ivoyager_assistant/ivoyager_assistant.cfg[/code] (with
+## overrides from [code]res://ivoyager_override.cfg[/code]) and registers them
+## via [method EditorPlugin.add_autoload_singleton]. If you modify autoloads in
+## either config, disable and re-enable the plugin for changes to take effect.
 
+## Plugins that must be enabled before this one.
 const REQUIRED_PLUGINS: Array[String] = ["ivoyager_core"]
 
 var _config: ConfigFile # with overrides
