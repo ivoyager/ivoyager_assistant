@@ -54,14 +54,16 @@ func dispatch(method: String, params: Dictionary) -> Variant:
 						"message": "Simulator not started"}}
 			return _screenshot(params)
 		"save_game":
-			if !IVStateManager.started:
+			@warning_ignore("unsafe_method_access")
+			if !_server.is_ready():
 				return {"_error": {"code": ERR_NOT_STARTED,
-						"message": "Simulator not started"}}
+						"message": "Simulator not ready"}}
 			return _save_game(params)
 		"load_game":
-			if !IVStateManager.started:
+			@warning_ignore("unsafe_method_access")
+			if !_server.is_ready():
 				return {"_error": {"code": ERR_NOT_STARTED,
-						"message": "Simulator not started"}}
+						"message": "Simulator not ready"}}
 			return _load_game(params)
 		"get_save_status":
 			return _get_save_status()
