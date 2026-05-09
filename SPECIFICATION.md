@@ -36,7 +36,9 @@ IVAssistantTestSuite (RefCounted base class)
   ├─ ControlSuite: select_body, select_navigate, set_pause, set_speed, set_time,
   │                move_camera, show_hide_gui, list_actions, press_action
   ├─ CoreTestSuite: screenshot, save_game, load_game, get_save_status
-  └─ GuiInspectionSuite: find_nodes, inspect_node, read_node_text
+  ├─ GuiInspectionSuite: find_nodes, inspect_node, read_node_text
+  └─ MouseHoverSuite: warp_mouse, project_to_screen, get_hover_target,
+					  list_small_body_groups
 ```
 
 ### 2.3 Lifecycle
@@ -567,6 +569,92 @@ Recursively harvest all visible text content from a subtree in document order. T
 5. `read_node_text` with that path — harvest visible text
 6. Analyze entries for non-empty values, reasonable numeric ranges, correct section titles
 
+### 4.9 Mouse Hover Identification
+
+Three primitives for verifying the user-visible effect of any system that identifies on-screen elements at the mouse position (today this is `IVFragmentIdentifier`'s shader-encoded ids on asteroid points and orbit lines). Capability: `mouse_hover`.
+
+This suite intentionally observes [`IVMouseTargetLabel.text`](../ivoyager_core/ui/mouse_target_label.gd) — the label the user actually sees — rather than any specific identifier API. Tests written against these methods remain valid across replacement of the underlying identification mechanism (e.g. a future Compositors-based system replacing `IVFragmentIdentifier`).
+
+#### `warp_mouse`
+Synthesize an `InputEventMouseMotion` at a viewport pixel position. Updates `IVWorldController.mouse_position` (and any other input subscribers) the same way an OS-generated mouse event would, without moving the visible OS cursor.
+
+**Params:**
+- `position` (array, required) — `[x, y]` in viewport pixel coordinates
+
+**Result:**
+```json
+{"ok": true, "position": [640.0, 360.0]}
+```
+
+#### `project_to_screen`
+Project a 3D world position to a viewport pixel via the active `Camera3D.unproject_position()`. Use to find good test coordinates for hover assertions: project a body for body-pixel hover, project a body at a future time to land on its orbit line, project an asteroid for SBG-point hover.
+
+**Params (exactly one of `body`, `world_position`, or `small_body` required):**
+- `body` (string) — Body name; projects the body's current Node3D `global_position` (already in Godot scene-tree world coordinates).
+- `time` (float, optional, only with `body`) — TT J2000 seconds. When supplied, projects the body's position at that time (computed by walking the parent chain, summing each ancestor's per-parent local orbit position, and anchoring at the topmost body's `global_position`). A `time` other than current places the projected pixel on the body's orbit line where the body itself isn't — the hook for orbit-line hover testing.
+- `world_position` (array) — `[x, y, z]` in Godot scene-tree world coordinates (the same space as any `Node3D.global_position` in the scene). Note: position values returned by `get_body_position` / `get_body_state_vectors` are in Godot scene-tree units relative to the body's parent (not heliocentric world); anchor them by adding the parent body's `global_position` if you need world-space input here.
+- `small_body` (object) — Asteroid in an [`IVSmallBodiesGroup`](../ivoyager_core/tree/small_bodies_group.gd) by index, with sub-keys:
+  - `group` (string, required) — SBG name (discover via `list_small_body_groups`).
+  - `index` (int, required) — Element index within the group, `[0, count)`.
+
+  Projects the asteroid's current heliocentric position, computed from its stored Keplerian elements (precession ignored — see "Limitations" below). Lagrange-point (Trojan) groups are not supported and return ERR_INVALID_PARAMS.
+
+**Result:**
+```json
+{
+  "position": [820.5, 412.0],
+  "on_screen": true,
+  "behind_camera": false,
+  "world_position_used": [-329046784.0, 235556144.0, -161255408.0]
+}
+```
+
+For `small_body`, the response also includes `"name": "<asteroid name>"` (the entry from `IVSmallBodiesGroup.names`). `on_screen` is `true` only when `behind_camera` is `false` AND the projected pixel is inside the viewport rect. `world_position_used` is the Godot scene-tree world coordinate that was projected — useful for diagnosing scale or anchoring mismatches when projections land off-screen unexpectedly.
+
+**Limitations of asteroid projection:**
+- Trojan / Lagrange-point groups (`lp_integer != -1`) are rejected; their librating positions need a different model.
+- Precession of LAN and AP (rates from `IVSmallBodiesGroup.s_g_mag_de`) is not applied. For main-belt asteroids the per-decade drift is well within `IVFragmentIdentifier`'s ~9-pixel sample radius, so the projected pixel still falls inside the rendered point's identification grid for typical sim time deltas from epoch.
+
+#### `list_small_body_groups`
+Enumerate loaded `IVSmallBodiesGroup` instances. Useful for discovering valid `small_body.group` values for `project_to_screen`.
+
+**Params:** none
+
+**Result:**
+```json
+{
+  "groups": [
+	{"name": "MPC_NEAR_EARTH_OBJECTS", "alias": "NEAs", "count": 1234, "lp_integer": -1},
+	{"name": "JT4", "alias": "JT4", "count": 5678, "lp_integer": 4}
+  ]
+}
+```
+
+`lp_integer` is `-1` for normal heliocentric groups; `4` or `5` for Jupiter Trojans (L4/L5). Trojan groups cannot be passed to `project_to_screen` (see Limitations above).
+
+#### `get_hover_target`
+Return the current state of `IVMouseTargetLabel` — the user-visible identification of whatever shader element is under the mouse.
+
+**Params:** none
+
+**Result:**
+```json
+{
+  "text": "Mars (orbit)",
+  "visible": true,
+  "mouse_position": [830.0, 412.0]
+}
+```
+
+**Timing note:** `IVFragmentIdentifier` samples a SubViewport and runs an 8-frame calibration/value cycle before reporting an id. Allow ~250–400 ms (≥ ~16 frames at 60 Hz, doubling the cycle length for safety) between `warp_mouse` and the first reliable `get_hover_target` reading. Replacement implementations may have different timing — clients should poll `get_hover_target` until the text stabilizes rather than relying on a fixed delay.
+
+**Recommended hover-test workflow:**
+1. `move_camera` to a vantage point that puts the test target on-screen.
+2. Wait ~1 s for camera and HUDs to settle.
+3. `project_to_screen` with `body` to get the body's projected pixel.
+4. `warp_mouse` to that pixel (or a small offset for orbit-line tests).
+5. Sleep / poll briefly; call `get_hover_target` and assert on `text`.
+
 ## 5. Core API Dependencies
 
 The AssistantServer reads from and writes to these core objects:
@@ -582,6 +670,10 @@ The AssistantServer reads from and writes to these core objects:
 | `SpeedManager` | Via `IVGlobal.program[&"SpeedManager"]` | Speed index, `change_speed()` |
 | `Timekeeper` | Via `IVGlobal.program[&"Timekeeper"]` | Time queries and `set_time()` |
 | `CameraHandler` | Via `IVGlobal.program[&"CameraHandler"]` | Camera state and `move_to()` |
+| `IVMouseTargetLabel` | Found under `IVGlobal.program[&"TopUI"]` | Read `text` / `visible` for hover-target identification (independent of the underlying identifier mechanism) |
+| `Camera3D` | Via `Viewport.get_camera_3d()` | `unproject_position()` for world-to-screen projection |
+| `IVSmallBodiesGroup` | Static `small_bodies_groups` registry + `get_orbit_elements()` / `names` | Asteroid enumeration and per-asteroid Keplerian elements for `project_to_screen {small_body}` |
+| `IVOrbit` | Static `get_true_anomaly_from_mean_anomaly_elliptic()` and `get_position_from_elements_at_true_anomaly()` | Asteroid position from elements at current sim time |
 | `IVSave` | Autoload singleton (optional) | Save/load operations, save status queries (duck-typed) |
 
 ## 6. Threading and Safety
@@ -630,6 +722,7 @@ The `[assistant_test_suites]` section registers `IVAssistantTestSuite` subclasse
 | `ControlSuite` | `select_body`, `select_navigate`, `set_pause`, `set_speed`, `set_time`, `move_camera`, `show_hide_gui`, `list_actions`, `press_action` |
 | `CoreTestSuite` | `screenshot`, `save_game`, `load_game`, `get_save_status` |
 | `GuiInspectionSuite` | `find_nodes`, `inspect_node`, `read_node_text` |
+| `MouseHoverSuite` | `warp_mouse`, `project_to_screen`, `get_hover_target`, `list_small_body_groups` |
 
 **Override examples** (in `ivoyager_override.cfg` or `ivoyager_override2.cfg`):
 

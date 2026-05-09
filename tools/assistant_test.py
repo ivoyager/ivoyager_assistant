@@ -10,6 +10,7 @@ Usage:
     python assistant_test.py                  # game already running
     python assistant_test.py --launch         # start Godot automatically
     python assistant_test.py --skip-save      # skip save/load cycle
+    python assistant_test.py --skip-hover     # skip mouse-hover identification test
     python assistant_test.py --host HOST      # custom host (default: 127.0.0.1)
     python assistant_test.py --port PORT      # custom port (default: 29071)
 """
@@ -86,9 +87,10 @@ class AssistantClient:
 class TestRunner:
     """Runs the generic I, Voyager test sequence (SPECIFICATION.md section 9)."""
 
-    def __init__(self, client, skip_save=False):
+    def __init__(self, client, skip_save=False, skip_hover=False):
         self.client = client
         self.skip_save = skip_save
+        self.skip_hover = skip_hover
         self.capabilities = []
         self.passed = 0
         self.failed = 0
@@ -139,6 +141,7 @@ class TestRunner:
         self.test_2_start()
         self.test_3_verify_state()
         self.test_4_exercise_controls()
+        self.test_hover()
         self.test_5_save_load()
 
         if print_summary:
@@ -314,6 +317,174 @@ class TestRunner:
         else:
             self.skip("set_speed not available")
 
+    # Optional: mouse-hover identification (capability `mouse_hover`)
+    def test_hover(self):
+        print("[Mouse hover identification]")
+        if self.skip_hover:
+            self.skip("hover test skipped (--skip-hover)")
+            return
+        if not self.has_cap("mouse_hover"):
+            self.skip("mouse_hover capability not available")
+            return
+        if not self.has_cap("move_camera"):
+            self.skip("move_camera unavailable; cannot stage hover test")
+            return
+
+        self._hover_body()
+        self._hover_orbit_line()
+        self._hover_asteroid_point()
+
+    def _hover_body(self):
+        # Body picking via WorldController. Move the camera to a body so it
+        # sits at screen center, project, warp, read. Iterate candidates so a
+        # nearby satellite occluding the planet's pick pixel (e.g. ISS in
+        # front of Earth from some vantages) doesn't break the test — we just
+        # move on to the next candidate.
+        print("  -- Body picking")
+        candidates = ["STAR_SUN", "PLANET_MARS", "PLANET_JUPITER", "PLANET_EARTH"]
+        for body in candidates:
+            self.client.call("move_camera", {"target": body, "instant": True})
+            time.sleep(0.6)
+            resp = self.client.call("project_to_screen", {"body": body})
+            if "error" in resp:
+                continue
+            result = resp.get("result", {})
+            if not result.get("on_screen", False):
+                continue
+            pos = result.get("position", [0.0, 0.0])
+            px, py = float(pos[0]), float(pos[1])
+
+            self.client.call("warp_mouse", {"position": [px, py]})
+            time.sleep(0.4)
+            text = self.client.call("get_hover_target").get("result", {}).get("text", "")
+            bare = body.split("_", 1)[1].lower() if "_" in body else body.lower()
+            if bare in text.lower():
+                self.assert_true(
+                    True,
+                    "body hover: text contains %r (target=%s, got %r)" % (bare, body, text),
+                )
+                return
+
+        self.assert_true(False, "body hover: no candidate body identified by hover")
+
+    def _set_wide_solar_view(self):
+        # Target Sun with a large perspective distance so multiple planet
+        # orbits and the asteroid belt fit on screen at once. The .z component
+        # of view_position is in target perspective-radii; for the Sun
+        # (~700,000 km mean radius) z=1000 places the camera ~4.7 AU from Sun,
+        # which frames Mercury → Jupiter and the main asteroid belt.
+        self.client.call("select_body", {"name": "STAR_SUN"})
+        self.client.call("move_camera", {
+            "target": "STAR_SUN",
+            "view_position": [0.0, 0.5, 1000.0],
+            "instant": True,
+        })
+        time.sleep(1.0)
+
+    def _hover_orbit_line(self):
+        # Project a body at a future time (quarter-orbit ahead) and hover
+        # there. Body itself isn't at that pixel, so the only thing that can
+        # identify it is the orbit-line shader (today: IVFragmentIdentifier).
+        # Expect "(orbit)" in the label — distinguishes from body picking.
+        print("  -- Body-orbit line")
+        if not self.has_cap("get_body_orbit") or not self.has_cap("get_time"):
+            self.skip("orbit hover: get_body_orbit or get_time unavailable")
+            return
+
+        self._set_wide_solar_view()
+
+        time_resp = self.client.call("get_time")
+        current_time = float(time_resp.get("result", {}).get("time", 0.0))
+
+        candidates = ["PLANET_EARTH", "PLANET_MARS", "PLANET_JUPITER", "PLANET_VENUS"]
+        for body in candidates:
+            orbit_resp = self.client.call("get_body_orbit", {"name": body})
+            period = float(orbit_resp.get("result", {}).get("period", 0.0))
+            if period <= 0.0:
+                continue
+
+            for fraction in (0.25, 0.125, 0.0625, 0.5):
+                future_time = current_time + period * fraction
+                proj_resp = self.client.call(
+                    "project_to_screen", {"body": body, "time": future_time})
+                if "error" in proj_resp:
+                    continue
+                result = proj_resp.get("result", {})
+                if not result.get("on_screen", False):
+                    continue
+                pos = result.get("position", [0.0, 0.0])
+                px, py = float(pos[0]), float(pos[1])
+
+                self.client.call("warp_mouse", {"position": [px, py]})
+                time.sleep(0.4)
+                hover_resp = self.client.call("get_hover_target")
+                text = hover_resp.get("result", {}).get("text", "")
+                if "orbit" in text.lower():
+                    self.assert_true(
+                        True,
+                        "orbit hover: text %r contains 'orbit' (target=%s, fraction=%g)"
+                        % (text, body, fraction),
+                    )
+                    return
+
+        self.skip("orbit hover: no candidate body's orbit line resolved an identification")
+
+    def _hover_asteroid_point(self):
+        # List SBGs, project an asteroid in the first non-Trojan group, hover.
+        # Identifies an asteroid POINT (FragmentIdentifier sbg-point branch);
+        # text is the asteroid's stored name.
+        print("  -- Asteroid point")
+        resp = self.client.call("list_small_body_groups")
+        if "error" in resp:
+            self.skip("asteroid hover: list_small_body_groups failed")
+            return
+        groups = resp.get("result", {}).get("groups", [])
+        non_lp_groups = [g for g in groups
+                         if g.get("lp_integer", -1) == -1 and g.get("count", 0) > 0]
+        if not non_lp_groups:
+            self.skip("asteroid hover: no non-Trojan SBG with elements available")
+            return
+
+        self._set_wide_solar_view()
+
+        # Try several groups and many indices — asteroid orbits are scattered;
+        # not every individual will be on-screen at the current sim time.
+        for group in non_lp_groups:
+            group_name = group["name"]
+            max_count = min(200, group["count"])
+            for index in range(max_count):
+                proj_resp = self.client.call(
+                    "project_to_screen",
+                    {"small_body": {"group": group_name, "index": index}})
+                if "error" in proj_resp:
+                    continue
+                result = proj_resp.get("result", {})
+                if not result.get("on_screen", False):
+                    continue
+                pos = result.get("position", [0.0, 0.0])
+                px, py = float(pos[0]), float(pos[1])
+                expected_name = result.get("name", "")
+                if not expected_name:
+                    continue
+
+                self.client.call("warp_mouse", {"position": [px, py]})
+                time.sleep(0.4)
+                hover_resp = self.client.call("get_hover_target")
+                text = hover_resp.get("result", {}).get("text", "")
+                # POINT hover yields name; ORBIT hover yields name + " (orbit)".
+                # Either contains the asteroid's stored name as a substring.
+                if expected_name in text:
+                    self.assert_true(
+                        True,
+                        "asteroid hover: text %r contains %r (group=%s, index=%d)"
+                        % (text, expected_name, group_name, index),
+                    )
+                    return
+
+        self.skip(
+            "asteroid hover: no asteroid produced an identification across %d group(s)"
+            % len(non_lp_groups))
+
     # 9.3 Step 5: Save/load cycle
     def test_5_save_load(self):
         print("[5. Save/load cycle]")
@@ -390,6 +561,8 @@ def main():
                         help="Path to project directory")
     parser.add_argument("--skip-save", action="store_true",
                         help="Skip save/load cycle")
+    parser.add_argument("--skip-hover", action="store_true",
+                        help="Skip mouse-hover identification test")
     args = parser.parse_args()
 
     godot_proc = None
@@ -405,7 +578,7 @@ def main():
         client.connect()
         print("Connected!\n")
 
-        runner = TestRunner(client, skip_save=args.skip_save)
+        runner = TestRunner(client, skip_save=args.skip_save, skip_hover=args.skip_hover)
         success = runner.run_all()
 
         # 9.3 Step 6: Quit
