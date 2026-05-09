@@ -393,41 +393,62 @@ class TestRunner:
 
         self._set_wide_solar_view()
 
-        time_resp = self.client.call("get_time")
-        current_time = float(time_resp.get("result", {}).get("time", 0.0))
+        # IVBodyHUDsState.orbit_visible_flags is PERSIST_PROPERTIES and may
+        # reflect the previous user session (e.g. planetarium's view cacher
+        # restores it). Force-enable all body orbits so the orbit-line shader
+        # is drawing, then restore exact prior state in the finally clause.
+        # No has_cap gate — same reason as the asteroid hover path.
+        previous_orbit_flags = None
+        vis_resp = self.client.call(
+            "set_all_body_orbits_visibility", {"visible": True})
+        if "result" in vis_resp:
+            previous_orbit_flags = int(
+                vis_resp["result"].get("previous_flags", 0))
+            # Let visibility_changed propagate to orbit_visual.gd and the GPU
+            # render a frame with orbit shaders active.
+            time.sleep(0.5)
 
-        candidates = ["PLANET_EARTH", "PLANET_MARS", "PLANET_JUPITER", "PLANET_VENUS"]
-        for body in candidates:
-            orbit_resp = self.client.call("get_body_orbit", {"name": body})
-            period = float(orbit_resp.get("result", {}).get("period", 0.0))
-            if period <= 0.0:
-                continue
+        try:
+            time_resp = self.client.call("get_time")
+            current_time = float(time_resp.get("result", {}).get("time", 0.0))
 
-            for fraction in (0.25, 0.125, 0.0625, 0.5):
-                future_time = current_time + period * fraction
-                proj_resp = self.client.call(
-                    "project_to_screen", {"body": body, "time": future_time})
-                if "error" in proj_resp:
+            candidates = ["PLANET_EARTH", "PLANET_MARS", "PLANET_JUPITER", "PLANET_VENUS"]
+            for body in candidates:
+                orbit_resp = self.client.call("get_body_orbit", {"name": body})
+                period = float(orbit_resp.get("result", {}).get("period", 0.0))
+                if period <= 0.0:
                     continue
-                result = proj_resp.get("result", {})
-                if not result.get("on_screen", False):
-                    continue
-                pos = result.get("position", [0.0, 0.0])
-                px, py = float(pos[0]), float(pos[1])
 
-                self.client.call("warp_mouse", {"position": [px, py]})
-                time.sleep(0.4)
-                hover_resp = self.client.call("get_hover_target")
-                text = hover_resp.get("result", {}).get("text", "")
-                if "orbit" in text.lower():
-                    self.assert_true(
-                        True,
-                        "orbit hover: text %r contains 'orbit' (target=%s, fraction=%g)"
-                        % (text, body, fraction),
-                    )
-                    return
+                for fraction in (0.25, 0.125, 0.0625, 0.5):
+                    future_time = current_time + period * fraction
+                    proj_resp = self.client.call(
+                        "project_to_screen", {"body": body, "time": future_time})
+                    if "error" in proj_resp:
+                        continue
+                    result = proj_resp.get("result", {})
+                    if not result.get("on_screen", False):
+                        continue
+                    pos = result.get("position", [0.0, 0.0])
+                    px, py = float(pos[0]), float(pos[1])
 
-        self.skip("orbit hover: no candidate body's orbit line resolved an identification")
+                    self.client.call("warp_mouse", {"position": [px, py]})
+                    time.sleep(0.4)
+                    hover_resp = self.client.call("get_hover_target")
+                    text = hover_resp.get("result", {}).get("text", "")
+                    if "orbit" in text.lower():
+                        self.assert_true(
+                            True,
+                            "orbit hover: text %r contains 'orbit' (target=%s, fraction=%g)"
+                            % (text, body, fraction),
+                        )
+                        return
+
+            self.skip("orbit hover: no candidate body's orbit line resolved an identification")
+        finally:
+            if previous_orbit_flags is not None:
+                self.client.call(
+                    "set_body_orbit_visible_flags",
+                    {"flags": previous_orbit_flags})
 
     def _hover_asteroid_point(self):
         # List SBGs, project an asteroid in the first non-Trojan group, hover.
@@ -450,43 +471,81 @@ class TestRunner:
 
         self._set_wide_solar_view()
 
-        # Try several groups and many indices — asteroid orbits are scattered;
-        # not every individual will be on-screen at the current sim time.
+        # SBG points default to hidden (IVSBGHUDsState.points_visibilities is
+        # empty unless the project preinitializer seeds it), so without this
+        # toggle the FragmentIdentifier reads black pixels and never resolves.
+        # Note: we don't has_cap-gate this — capabilities was read pre-start, so
+        # runtime-gated methods aren't in the snapshot. Same pattern as the
+        # list_small_body_groups call above.
+        visibility_changes = []
         for group in non_lp_groups:
-            group_name = group["name"]
-            max_count = min(200, group["count"])
-            for index in range(max_count):
-                proj_resp = self.client.call(
-                    "project_small_body_to_screen",
-                    {"group": group_name, "index": index})
-                if "error" in proj_resp:
-                    continue
-                result = proj_resp.get("result", {})
-                if not result.get("on_screen", False):
-                    continue
-                pos = result.get("position", [0.0, 0.0])
-                px, py = float(pos[0]), float(pos[1])
-                expected_name = result.get("name", "")
-                if not expected_name:
-                    continue
+            vis_resp = self.client.call(
+                "set_small_body_points_visibility",
+                {"group": group["name"], "visible": True})
+            if "result" in vis_resp:
+                visibility_changes.append((
+                    group["name"],
+                    bool(vis_resp["result"].get("previous", False))))
+        if visibility_changes:
+            # Let the SBG points visuals respond to points_visibility_changed
+            # and the GPU draw a frame with the points present.
+            time.sleep(0.5)
 
-                self.client.call("warp_mouse", {"position": [px, py]})
-                time.sleep(0.4)
-                hover_resp = self.client.call("get_hover_target")
-                text = hover_resp.get("result", {}).get("text", "")
-                # POINT hover yields name; ORBIT hover yields name + " (orbit)".
-                # Either contains the asteroid's stored name as a substring.
-                if expected_name in text:
-                    self.assert_true(
-                        True,
-                        "asteroid hover: text %r contains %r (group=%s, index=%d)"
-                        % (text, expected_name, group_name, index),
-                    )
-                    return
+        try:
+            # Bound the warp budget so the test cannot run for minutes if the
+            # FragmentIdentifier fails to resolve (e.g. visibility toggle was
+            # gated out, or points are too small at this view to land in the
+            # 9-pixel sample). 30 attempts × ~0.4s ≈ 12s worst case.
+            per_group_cap = 10
+            total_cap = 30
+            total_attempts = 0
+            for group in non_lp_groups:
+                group_name = group["name"]
+                max_count = min(200, group["count"])
+                group_attempts = 0
+                for index in range(max_count):
+                    if group_attempts >= per_group_cap or total_attempts >= total_cap:
+                        break
+                    proj_resp = self.client.call(
+                        "project_small_body_to_screen",
+                        {"group": group_name, "index": index})
+                    if "error" in proj_resp:
+                        continue
+                    result = proj_resp.get("result", {})
+                    if not result.get("on_screen", False):
+                        continue
+                    pos = result.get("position", [0.0, 0.0])
+                    px, py = float(pos[0]), float(pos[1])
+                    expected_name = result.get("name", "")
+                    if not expected_name:
+                        continue
 
-        self.skip(
-            "asteroid hover: no asteroid produced an identification across %d group(s)"
-            % len(non_lp_groups))
+                    self.client.call("warp_mouse", {"position": [px, py]})
+                    time.sleep(0.4)
+                    hover_resp = self.client.call("get_hover_target")
+                    text = hover_resp.get("result", {}).get("text", "")
+                    group_attempts += 1
+                    total_attempts += 1
+                    # POINT hover yields name; ORBIT hover yields name + " (orbit)".
+                    # Either contains the asteroid's stored name as a substring.
+                    if expected_name in text:
+                        self.assert_true(
+                            True,
+                            "asteroid hover: text %r contains %r (group=%s, index=%d)"
+                            % (text, expected_name, group_name, index),
+                        )
+                        return
+                if total_attempts >= total_cap:
+                    break
+
+            self.skip(
+                "asteroid hover: %d on-screen attempt(s) across %d group(s) did not resolve"
+                % (total_attempts, len(non_lp_groups)))
+        finally:
+            for group_name, prev in visibility_changes:
+                self.client.call(
+                    "set_small_body_points_visibility",
+                    {"group": group_name, "visible": prev})
 
     # 9.3 Step 5: Save/load cycle
     def test_5_save_load(self):

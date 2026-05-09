@@ -49,6 +49,7 @@ const KNOWN_TOKENS: Array[String] = [
 	"program.SpeedManager",
 	"program.Timekeeper",
 	"program.CameraHandler",
+	"program.BodyHUDsState",
 	# Optional autoloads (duck-typed)
 	"autoload.IVSave",
 	# IVCoreSettings.body_tables membership
@@ -541,6 +542,8 @@ func _evaluate_token(token: String) -> bool:
 			return IVGlobal.program.has(&"Timekeeper")
 		"program.CameraHandler":
 			return IVGlobal.program.has(&"CameraHandler")
+		"program.BodyHUDsState":
+			return IVGlobal.program.has(&"BodyHUDsState")
 		"autoload.IVSave":
 			return _save_singleton != null
 		"body_table.stars":

@@ -38,13 +38,18 @@ extends IVAssistantTestSuite
 
 
 func get_method_names() -> Array[String]:
-	return ["project_small_body_to_screen", "list_small_body_groups"]
+	return [
+		"project_small_body_to_screen",
+		"list_small_body_groups",
+		"set_small_body_points_visibility",
+	]
 
 
 func get_method_requirements() -> Dictionary:
 	return {
 		"project_small_body_to_screen": ["runtime.IVSmallBodiesGroup"],
 		"list_small_body_groups": ["runtime.IVSmallBodiesGroup"],
+		"set_small_body_points_visibility": ["runtime.IVSmallBodiesGroup"],
 	}
 
 
@@ -58,6 +63,8 @@ func dispatch(method: String, params: Dictionary) -> Variant:
 			return _project_small_body_to_screen(params)
 		"list_small_body_groups":
 			return _list_small_body_groups()
+		"set_small_body_points_visibility":
+			return _set_small_body_points_visibility(params)
 	return {"_error": {"code": ERR_UNKNOWN_METHOD,
 			"message": "Unknown method: %s" % method}}
 
@@ -162,3 +169,36 @@ func _list_small_body_groups() -> Dictionary:
 			"lp_integer": sbg.lp_integer,
 		})
 	return {"groups": groups}
+
+
+# Drives [IVSBGHUDsState.change_points_visibility]. SBG points default to
+# hidden, so the FragmentIdentifier's sbg-point branch can't resolve a hover
+# until the group is toggled on. Note: persisted via
+# [member IVSBGHUDsState.PERSIST_PROPERTIES] and may be restored from a prior
+# user session by the project (e.g. planetarium's view cacher), so the
+# starting state is project- and session-dependent. Returns the previous
+# state so the caller can restore it.
+func _set_small_body_points_visibility(params: Dictionary) -> Variant:
+	var group_var: Variant = params.get("group")
+	if typeof(group_var) != TYPE_STRING or group_var == "":
+		return {"_error": {"code": ERR_INVALID_PARAMS,
+				"message": "'group' must be a non-empty string"}}
+	var visible_var: Variant = params.get("visible")
+	if typeof(visible_var) != TYPE_BOOL:
+		return {"_error": {"code": ERR_INVALID_PARAMS,
+				"message": "Missing or invalid 'visible' parameter (must be bool)"}}
+	var group_name: String = group_var
+	var visible: bool = visible_var
+	var sn := StringName(group_name)
+	if !IVSmallBodiesGroup.small_bodies_groups.has(sn):
+		return {"_error": {"code": ERR_BODY_NOT_FOUND,
+				"message": "Small bodies group not found: %s" % group_name}}
+	var sbg: IVSmallBodiesGroup = IVSmallBodiesGroup.small_bodies_groups[sn]
+	var huds_state: IVSBGHUDsState = IVGlobal.program.get(&"SBGHUDsState")
+	if !huds_state:
+		return {"_error": {"code": ERR_NOT_STARTED,
+				"message": "SBGHUDsState not available"}}
+	var previous: bool = huds_state.is_points_visible(sbg.sbg_alias)
+	if previous != visible:
+		huds_state.change_points_visibility(sbg.sbg_alias, visible)
+	return {"ok": true, "previous": previous, "visible": visible}
