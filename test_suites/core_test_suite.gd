@@ -37,13 +37,12 @@ func get_method_names() -> Array[String]:
 	return ["screenshot", "save_game", "load_game", "get_save_status"]
 
 
-func get_capabilities() -> Array[String]:
-	var caps: Array[String] = ["screenshot"]
-	if _save_singleton:
-		caps.append("save_game")
-		caps.append("load_game")
-		caps.append("get_save_status")
-	return caps
+func get_method_requirements() -> Dictionary:
+	return {
+		"save_game": ["autoload.IVSave"],
+		"load_game": ["autoload.IVSave"],
+		"get_save_status": ["autoload.IVSave"],
+	}
 
 
 func dispatch(method: String, params: Dictionary) -> Variant:
@@ -104,9 +103,6 @@ func _screenshot(params: Dictionary) -> Dictionary:
 
 
 func _save_game(params: Dictionary) -> Dictionary:
-	if !_save_singleton:
-		return {"_error": {"code": ERR_NOT_ALLOWED,
-				"message": "Save plugin not available"}}
 	var save_type: String = params.get("type", "quicksave")
 	if save_type != "quicksave" and save_type != "named" and save_type != "autosave":
 		return {"_error": {"code": ERR_INVALID_PARAMS,
@@ -125,9 +121,6 @@ func _save_game(params: Dictionary) -> Dictionary:
 
 
 func _load_game(params: Dictionary) -> Dictionary:
-	if !_save_singleton:
-		return {"_error": {"code": ERR_NOT_ALLOWED,
-				"message": "Save plugin not available"}}
 	var path: String = params.get("path", "")
 	@warning_ignore_start("unsafe_method_access")
 	if path:
@@ -139,9 +132,6 @@ func _load_game(params: Dictionary) -> Dictionary:
 
 
 func _get_save_status() -> Dictionary:
-	if !_save_singleton:
-		return {"_error": {"code": ERR_NOT_ALLOWED,
-				"message": "Save plugin not available"}}
 	@warning_ignore_start("unsafe_property_access", "unsafe_method_access",
 			"unsafe_call_argument")
 	var save_dir: String = _save_singleton.get_directory()

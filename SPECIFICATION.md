@@ -722,7 +722,8 @@ The `[assistant_test_suites]` section registers `IVAssistantTestSuite` subclasse
 | `ControlSuite` | `select_body`, `select_navigate`, `set_pause`, `set_speed`, `set_time`, `move_camera`, `show_hide_gui`, `list_actions`, `press_action` |
 | `CoreTestSuite` | `screenshot`, `save_game`, `load_game`, `get_save_status` |
 | `GuiInspectionSuite` | `find_nodes`, `inspect_node`, `read_node_text` |
-| `MouseHoverSuite` | `warp_mouse`, `project_to_screen`, `get_hover_target`, `list_small_body_groups` |
+| `MouseTargetIdSuite` | `warp_mouse`, `project_to_screen`, `get_hover_target` |
+| `SmallBodiesIdSuite` | `project_small_body_to_screen`, `list_small_body_groups` |
 
 **Override examples** (in `ivoyager_override.cfg` or `ivoyager_override2.cfg`):
 
@@ -744,7 +745,10 @@ Setting a suite to `null` or `""` removes it. Adding a new key registers a new s
 
 Extend `IVAssistantTestSuite` and override:
 - `get_method_names()` — Return the method names your suite handles
-- `get_capabilities()` — Return capability strings for `get_project_info`
+- `get_method_requirements()` — Map<method_name, Array[String]> of requirement tokens (see §7.5). Methods whose tokens evaluate false at load time (or at `simulator_started`, for widget tokens) are dropped from the dispatch table and reported in `gated_out`.
+- `get_method_summaries()` — Optional Map<method_name, String> of one-line summaries surfaced in the `methods` field of `get_project_info`.
+- `is_applicable()` — Return `false` to opt out of the entire suite. Use for all-or-nothing dependencies that don't fit the per-method token vocabulary (e.g. an asteroid-only suite checking `&"asteroids" in IVCoreSettings.body_tables`).
+- `get_capabilities()` — Return additional capability strings (feature-group identifiers, e.g. `"mouse_hover"`) that aren't method names. Most suites can leave this empty: the server already advertises every active method name in `capabilities`.
 - `dispatch(method, params)` — Handle method calls, return result or `_error` dict
 - `requires_sim_started()` — Return `false` if some methods work before sim starts (default: `true`)
 - `_on_simulator_started()` / `_on_about_to_free()` — Cache/clear program references
@@ -779,20 +783,61 @@ The default predicate is trivially `true`, so projects that don't set `ready_pre
 
 Test suites that opt out of the suite-wide gate (`requires_sim_started()` returns `false`) can still consult the gate per-method via `IVAssistantServer.is_ready()`. The bundled `CoreTestSuite` uses this for `save_game` and `load_game` so save/load races against deferred initialization are blocked even when the suite handles other methods (e.g. `get_save_status`) pre-simulator.
 
+### 7.5 Requirement-Token Vocabulary
+
+`IVAssistantTestSuite.get_method_requirements()` returns a Map<method_name, Array[String]>. Each string is a requirement token from the closed vocabulary defined in `IVAssistantServer.KNOWN_TOKENS`. Unknown tokens `push_error` at suite load and are dropped (the method is then registered as unconditionally available, matching the suite-author's intent of "no recognized restriction").
+
+A method is **active** (callable, listed in `capabilities`, listed under `methods` in `get_project_info`) iff every token in its requirement list resolves true. Methods with at least one unmet token are dropped from the dispatch table — calling one returns `ERR_UNKNOWN_METHOD`, identical to a never-implemented method — and are listed under `gated_out` in `get_project_info` with the unmet token names.
+
+The vocabulary:
+
+| Token | Resolves to |
+|---|---|
+| `core.allow_time_setting` | `IVCoreSettings.allow_time_setting` |
+| `core.allow_time_reversal` | `IVCoreSettings.allow_time_reversal` |
+| `program.TopUI` | `IVGlobal.program.has(&"TopUI")` |
+| `program.SpeedManager` | `IVGlobal.program.has(&"SpeedManager")` |
+| `program.Timekeeper` | `IVGlobal.program.has(&"Timekeeper")` |
+| `program.CameraHandler` | `IVGlobal.program.has(&"CameraHandler")` |
+| `autoload.IVSave` | autoload at `/root/IVSave` is present |
+| `body_table.stars` | `&"stars" in IVCoreSettings.body_tables` |
+| `body_table.planets` | `&"planets" in IVCoreSettings.body_tables` |
+| `body_table.moons` | `&"moons" in IVCoreSettings.body_tables` |
+| `body_table.asteroids` | `&"asteroids" in IVCoreSettings.body_tables` |
+| `body_table.spacecrafts` | `&"spacecrafts" in IVCoreSettings.body_tables` |
+| `widget.MouseTargetLabel` | `IVMouseTargetLabel` reachable under `program.TopUI` after `simulator_started` |
+| `runtime.IVSmallBodiesGroup` | `IVSmallBodiesGroup.small_bodies_groups` non-empty after `simulator_started` |
+
+`core.*`, `program.*`, `autoload.*`, and `body_table.*` tokens resolve at `core_initialized` time (when suites load). `widget.*` and `runtime.*` tokens are evaluated against post-init state on `simulator_started`; before sim start they resolve false (the gated method is not active). After sim start the gating refreshes once. Clients querying `get_project_info` before vs after `start_game` see different `capabilities` / `gated_out` lists for those tokens — the post-start query is authoritative.
+
+Suites that need a coarser opt-out than the per-method vocabulary supports can override `is_applicable() -> bool` to short-circuit registration entirely. The check fires once at `core_initialized`, so `is_applicable()` is the right tool for config-driven all-or-nothing decisions (e.g. a flag in `IVCoreSettings` that a project sets in its preinitializer). For runtime conditions known only after the system tree is built, use a per-method `runtime.*` requirement instead.
+
+To extend the vocabulary, add an entry to `KNOWN_TOKENS` and a corresponding case in `_evaluate_token()` in `assistant_server.gd`. Tokens are stringly-typed and validated at suite load, so typos in suite code surface immediately as a `push_error`.
+
 ## 8. Cross-Project Compatibility
 
 The plugin is designed as a git submodule usable across any I, Voyager project. Enable the plugin in Project Settings → Plugins — no project-level config changes are needed.
 
 ### 8.1 Feature Availability
 
-Not all projects support all features. The `capabilities` array returned by `get_project_info` tells the client which methods are available. Capability detection is based on:
+Not all projects support all features. `get_project_info` returns three related fields that describe the current configuration:
 
-- **Program objects**: Methods requiring `TopUI`, `CameraHandler`, `SpeedManager`, or `Timekeeper` are only listed if those objects are registered.
-- **Settings**: `set_time` requires `IVCoreSettings.allow_time_setting == true`.
-- **Project type**: `start_game` is only listed for projects with `IVCoreSettings.wait_for_start == true`.
-- **Plugins**: `save_game`, `load_game`, and `get_save_status` are only listed when the `ivoyager_save` plugin is present.
+- `capabilities` — Flat string array of every active method name plus suite-supplied feature flags (e.g. `"mouse_hover"`). This is the canonical source for AI clients deciding whether to call a method.
+- `methods` — Map<method_name, {summary?: String}> covering every active method. The shape is reserved for future per-method metadata; today only the optional `summary` is populated.
+- `gated_out` — Array of `{"method": String, "unmet": Array[String]}` entries, one per registered-but-currently-unavailable method, naming the requirement tokens that resolved false. Lets clients distinguish "this build doesn't support X" from "X doesn't exist."
 
-Methods not in the capabilities list will return appropriate error codes (ERR_NOT_STARTED or ERR_NOT_ALLOWED) if called.
+Gating is driven by the per-method requirement-token vocabulary (see §7.5). Concretely:
+
+- **Program objects**: Methods declaring `program.TopUI`, `program.CameraHandler`, `program.SpeedManager`, or `program.Timekeeper` only activate when those program objects are registered.
+- **Settings**: `set_time` declares `core.allow_time_setting`, so it activates only when `IVCoreSettings.allow_time_setting == true`.
+- **Project type**: `start_game` is hard-coded into `capabilities` only for projects with `IVCoreSettings.wait_for_start == true`.
+- **Plugins**: `save_game`, `load_game`, and `get_save_status` declare `autoload.IVSave`, so they activate only when the `ivoyager_save` plugin is present.
+- **Small-bodies groups**: `SmallBodiesIdSuite`'s `project_small_body_to_screen` and `list_small_body_groups` declare `runtime.IVSmallBodiesGroup`. They activate only after `simulator_started` if `IVSmallBodiesGroup.small_bodies_groups` has at least one entry — i.e. the project's `small_bodies_groups` table has any non-`skip` rows and `IVTableSystemBuilder.add_small_bodies_groups` is true. (This is **not** the same as `body_table.asteroids`: that flag controls whether the few "explored" asteroids are loaded as `IVBody` instances; the SBG point clouds the suite actually targets are populated from the separate `small_bodies_groups` table.)
+- **Widgets**: `get_hover_target` declares `widget.MouseTargetLabel` and activates only after `simulator_started` if an `IVMouseTargetLabel` is reachable under `program.TopUI`.
+
+Calling a gated-out method returns `ERR_UNKNOWN_METHOD`. The protocol intentionally collapses "method not implemented" and "method gated out by configuration" into the same error: a missing capability looks identical to a never-implemented one, which is what clients should treat it as. The `gated_out` list is informational — clients that want to explain *why* a method is unavailable can read it.
+
+The manifest version is reported as `assistant_protocol_version` (currently `2`); fields are added additively across versions.
 
 ### 8.2 Splash Screen Handling
 

@@ -53,17 +53,11 @@ func get_method_names() -> Array[String]:
 	]
 
 
-func get_capabilities() -> Array[String]:
-	var caps: Array[String] = [
-		"get_time", "list_bodies",
-		"get_body_info", "get_body_position", "get_body_orbit",
-		"get_body_distance", "get_body_state_vectors",
-	]
-	if IVGlobal.program.has(&"TopUI"):
-		caps.append("get_selection")
-	if IVGlobal.program.has(&"CameraHandler"):
-		caps.append("get_camera")
-	return caps
+func get_method_requirements() -> Dictionary:
+	return {
+		"get_selection": ["program.TopUI"],
+		"get_camera": ["program.CameraHandler"],
+	}
 
 
 func dispatch(method: String, params: Dictionary) -> Variant:

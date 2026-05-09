@@ -52,20 +52,14 @@ func get_method_names() -> Array[String]:
 	]
 
 
-func get_capabilities() -> Array[String]:
-	var caps: Array[String] = [
-		"set_pause", "show_hide_gui", "list_actions", "press_action",
-	]
-	if IVGlobal.program.has(&"TopUI"):
-		caps.append("select_body")
-		caps.append("select_navigate")
-	if IVGlobal.program.has(&"CameraHandler"):
-		caps.append("move_camera")
-	if IVGlobal.program.has(&"SpeedManager"):
-		caps.append("set_speed")
-	if IVGlobal.program.has(&"Timekeeper") and IVCoreSettings.allow_time_setting:
-		caps.append("set_time")
-	return caps
+func get_method_requirements() -> Dictionary:
+	return {
+		"select_body": ["program.TopUI"],
+		"select_navigate": ["program.TopUI"],
+		"move_camera": ["program.CameraHandler"],
+		"set_speed": ["program.SpeedManager"],
+		"set_time": ["program.Timekeeper", "core.allow_time_setting"],
+	}
 
 
 func dispatch(method: String, params: Dictionary) -> Variant:
@@ -93,10 +87,6 @@ func dispatch(method: String, params: Dictionary) -> Variant:
 
 
 func _select_body(params: Dictionary) -> Variant:
-	if !_selection_manager:
-		return {"_error": {"code": ERR_NOT_STARTED,
-				"message": "Selection manager not available"}}
-
 	var body_or_err: Variant = IVAssistantTestSuite.parse_body(params.get("name"), "name")
 	if body_or_err is Dictionary:
 		return body_or_err
@@ -122,10 +112,6 @@ func _set_pause(params: Dictionary) -> Dictionary:
 
 
 func _set_speed(params: Dictionary) -> Dictionary:
-	if !_speed_manager:
-		return {"_error": {"code": ERR_NOT_STARTED,
-				"message": "Speed manager not available"}}
-
 	if params.has("real_time"):
 		_speed_manager.change_speed(0)
 	elif params.has("index"):
@@ -160,10 +146,6 @@ func _set_speed(params: Dictionary) -> Dictionary:
 
 
 func _select_navigate(params: Dictionary) -> Dictionary:
-	if !_selection_manager:
-		return {"_error": {"code": ERR_NOT_STARTED,
-				"message": "Selection manager not available"}}
-
 	var dir_var: Variant = params.get("direction")
 	if typeof(dir_var) != TYPE_STRING or dir_var == "":
 		return {"_error": {"code": ERR_INVALID_PARAMS,
@@ -251,14 +233,6 @@ func _select_navigate(params: Dictionary) -> Dictionary:
 
 
 func _set_time(params: Dictionary) -> Dictionary:
-	if !_timekeeper:
-		return {"_error": {"code": ERR_NOT_STARTED,
-				"message": "Timekeeper not available"}}
-
-	if !IVCoreSettings.allow_time_setting:
-		return {"_error": {"code": ERR_NOT_ALLOWED,
-				"message": "Time setting is not allowed"}}
-
 	if params.has("time"):
 		var time_var: Variant = params["time"]
 		if typeof(time_var) != TYPE_FLOAT and typeof(time_var) != TYPE_INT:
@@ -312,10 +286,6 @@ func _set_time(params: Dictionary) -> Dictionary:
 
 
 func _move_camera(params: Dictionary) -> Dictionary:
-	if !_camera_handler:
-		return {"_error": {"code": ERR_NOT_STARTED,
-				"message": "Camera handler not available"}}
-
 	# Parse target (optional)
 	var target_var: Variant = params.get("target")
 	var has_target := target_var != null

@@ -1,4 +1,4 @@
-# mouse_hover_suite.gd
+# mouse_target_id_suite.gd
 # This file is part of I, Voyager
 # https://ivoyager.dev
 # *****************************************************************************
@@ -19,22 +19,24 @@
 # *****************************************************************************
 extends IVAssistantTestSuite
 
-## Mouse-hover identification testing for [IVAssistantServer].
+## Mouse-driven on-screen-target identification primitives for
+## [IVAssistantServer].
 ##
-## Provides primitives for verifying the user-visible effect of any system
-## that identifies on-screen elements at the mouse position (today this is
-## [code]IVFragmentIdentifier[/code]'s shader-encoded ids on asteroid points
-## and orbit lines):[br][br]
+## Building blocks for staging and verifying the user-visible effect of any
+## system that identifies what the mouse is over (today this is
+## [code]IVFragmentIdentifier[/code]'s shader-encoded ids on bodies, body
+## meshes, and orbit lines, surfaced via [IVMouseTargetLabel]):[br][br]
 ##
 ## - [code]warp_mouse[/code] synthesizes an [InputEventMouseMotion] at a
 ##   given viewport pixel.[br]
-## - [code]project_to_screen[/code] converts a body, body-orbit point, raw
-##   world-space position, or asteroid in an [IVSmallBodiesGroup] into
-##   viewport pixel coordinates.[br]
+## - [code]project_to_screen[/code] converts a body-anchored or raw
+##   world-space position into viewport pixel coordinates.[br]
 ## - [code]get_hover_target[/code] reads the current [IVMouseTargetLabel]
-##   text and visibility.[br]
-## - [code]list_small_body_groups[/code] enumerates loaded
-##   [IVSmallBodiesGroup]s for asteroid-point hover staging.[br][br]
+##   text and visibility.[br][br]
+##
+## [IVSmallBodiesGroup] point projection lives in
+## [code]SmallBodiesIdSuite[/code] (see [code]small_bodies_id_suite.gd[/code])
+## so projects without small-bodies groups loaded don't carry the dependency.[br][br]
 ##
 ## The suite reads [member IVMouseTargetLabel.text] (the user-visible effect)
 ## rather than any specific identifier API, so tests written against this
@@ -58,14 +60,17 @@ func _on_about_to_free() -> void:
 
 
 func get_method_names() -> Array[String]:
-	return [
-		"warp_mouse", "project_to_screen", "get_hover_target",
-		"list_small_body_groups",
-	]
+	return ["warp_mouse", "project_to_screen", "get_hover_target"]
+
+
+func get_method_requirements() -> Dictionary:
+	return {
+		"get_hover_target": ["widget.MouseTargetLabel"],
+	}
 
 
 func get_capabilities() -> Array[String]:
-	return ["mouse_hover"]
+	return ["mouse_target_id"]
 
 
 func dispatch(method: String, params: Dictionary) -> Variant:
@@ -76,8 +81,6 @@ func dispatch(method: String, params: Dictionary) -> Variant:
 			return _project_to_screen(params)
 		"get_hover_target":
 			return _get_hover_target()
-		"list_small_body_groups":
-			return _list_small_body_groups()
 	return {"_error": {"code": ERR_UNKNOWN_METHOD,
 			"message": "Unknown method: %s" % method}}
 
@@ -108,14 +111,12 @@ func _warp_mouse(params: Dictionary) -> Variant:
 func _project_to_screen(params: Dictionary) -> Variant:
 	var has_body := params.has("body")
 	var has_world := params.has("world_position")
-	var has_small_body := params.has("small_body")
-	var mode_count := int(has_body) + int(has_world) + int(has_small_body)
+	var mode_count := int(has_body) + int(has_world)
 	if mode_count != 1:
 		return {"_error": {"code": ERR_INVALID_PARAMS,
-				"message": "Provide exactly one of 'body', 'world_position', or 'small_body'"}}
+				"message": "Provide exactly one of 'body' or 'world_position'"}}
 
 	var world_pos: Vector3
-	var extras: Dictionary = {}
 
 	if has_body:
 		var body_or_err: Variant = IVAssistantTestSuite.parse_body(params.get("body"), "body")
@@ -148,22 +149,13 @@ func _project_to_screen(params: Dictionary) -> Variant:
 					helio += current.get_position_vector(time_num)
 				current = current.parent
 			world_pos = root.global_position + helio
-	elif has_world:
+	else:
 		var pos_or_err: Variant = IVAssistantTestSuite.parse_vector3(
 				params.get("world_position"), "world_position")
 		if pos_or_err is Dictionary:
 			return pos_or_err
 		var parsed_pos: Vector3 = pos_or_err
 		world_pos = parsed_pos
-	else:
-		var sb_or_err: Variant = _world_pos_from_small_body(params.get("small_body"))
-		if sb_or_err is Dictionary and sb_or_err.has("_error"):
-			return sb_or_err
-		var sb_result: Array = sb_or_err
-		var sb_pos: Vector3 = sb_result[0]
-		var sb_name: String = sb_result[1]
-		world_pos = sb_pos
-		extras["name"] = sb_name
 
 	var viewport: Viewport = _server.get_viewport()
 	var camera: Camera3D = viewport.get_camera_3d()
@@ -177,81 +169,15 @@ func _project_to_screen(params: Dictionary) -> Variant:
 	var on_screen := !behind and (
 			screen.x >= 0.0 and screen.y >= 0.0
 			and screen.x <= rect_size.x and screen.y <= rect_size.y)
-	var response: Dictionary = {
+	return {
 		"position": [screen.x, screen.y],
 		"on_screen": on_screen,
 		"behind_camera": behind,
 		"world_position_used": [world_pos.x, world_pos.y, world_pos.z],
 	}
-	response.merge(extras)
-	return response
-
-
-# Returns [world_pos: Vector3, name: String] on success or an _error Dictionary.
-func _world_pos_from_small_body(sb_var: Variant) -> Variant:
-	if typeof(sb_var) != TYPE_DICTIONARY:
-		return {"_error": {"code": ERR_INVALID_PARAMS,
-				"message": "'small_body' must be an object with 'group' and 'index'"}}
-	var sb: Dictionary = sb_var
-	var group_var: Variant = sb.get("group")
-	if typeof(group_var) != TYPE_STRING or group_var == "":
-		return {"_error": {"code": ERR_INVALID_PARAMS,
-				"message": "'small_body.group' must be a non-empty string"}}
-	var index_var: Variant = sb.get("index")
-	if typeof(index_var) != TYPE_INT and typeof(index_var) != TYPE_FLOAT:
-		return {"_error": {"code": ERR_INVALID_PARAMS,
-				"message": "'small_body.index' must be a number"}}
-	var group_name: String = group_var
-	var index: int = int(index_var)
-	var sn := StringName(group_name)
-	if !IVSmallBodiesGroup.small_bodies_groups.has(sn):
-		return {"_error": {"code": ERR_BODY_NOT_FOUND,
-				"message": "Small bodies group not found: %s" % group_name}}
-	var sbg: IVSmallBodiesGroup = IVSmallBodiesGroup.small_bodies_groups[sn]
-	var n_bodies: int = sbg.get_number()
-	if index < 0 or index >= n_bodies:
-		return {"_error": {"code": ERR_INVALID_PARAMS,
-				"message": "'small_body.index' out of range [0, %d)" % n_bodies}}
-	if sbg.lp_integer != -1:
-		return {"_error": {"code": ERR_INVALID_PARAMS,
-				"message": "Lagrange-point (Trojan) groups are not supported by project_to_screen"}}
-
-	# Reconstruct the asteroid's local position (relative to its primary body)
-	# from stored orbital elements. The SBG stores `a` and the resulting
-	# Kepler-derived position in Godot scene-tree units (the points shader
-	# reads the same arrays to render vertex positions in world space), so no
-	# unit scaling is needed. Anchor in world coords by adding the primary's
-	# global_position. Precession (s, g rates from sbg.s_g_mag_de) is ignored
-	# — for main-belt asteroids the per-decade drift is well within the
-	# fragment identifier's ~9-pixel sample radius.
-	var elements: Array[float] = sbg.get_orbit_elements(index)
-	var a: float = elements[0]
-	var e: float = elements[1]
-	var inc: float = elements[2]
-	var lan: float = elements[3]
-	var ap: float = elements[4]
-	var m0: float = elements[5]
-	var n: float = elements[6]
-	var current_time: float = IVGlobal.times[0]
-	var mean_anomaly: float = m0 + n * current_time
-	var true_anomaly: float = IVOrbit.get_true_anomaly_from_mean_anomaly_elliptic(
-			e, mean_anomaly)
-	var semi_parameter: float = a * (1.0 - e * e)
-	var local_pos: Vector3 = IVOrbit.get_position_from_elements_at_true_anomaly(
-			semi_parameter, e, inc, lan, ap, true_anomaly)
-	var primary: Node3D = sbg.get_parent()
-	if !primary:
-		return {"_error": {"code": ERR_NOT_STARTED,
-				"message": "Small bodies group has no primary parent"}}
-	var world_pos: Vector3 = primary.global_position + local_pos
-	var sb_name: String = sbg.names[index]
-	return [world_pos, sb_name]
 
 
 func _get_hover_target() -> Variant:
-	if !_mouse_target_label:
-		return {"_error": {"code": ERR_NOT_STARTED,
-				"message": "MouseTargetLabel not found"}}
 	var viewport: Viewport = _server.get_viewport()
 	var mouse_pos: Vector2 = viewport.get_mouse_position()
 	return {
@@ -259,16 +185,3 @@ func _get_hover_target() -> Variant:
 		"visible": _mouse_target_label.visible,
 		"mouse_position": [mouse_pos.x, mouse_pos.y],
 	}
-
-
-func _list_small_body_groups() -> Dictionary:
-	var groups: Array[Dictionary] = []
-	for sbg_name: StringName in IVSmallBodiesGroup.small_bodies_groups:
-		var sbg: IVSmallBodiesGroup = IVSmallBodiesGroup.small_bodies_groups[sbg_name]
-		groups.append({
-			"name": String(sbg_name),
-			"alias": String(sbg.sbg_alias),
-			"count": sbg.get_number(),
-			"lp_integer": sbg.lp_integer,
-		})
-	return {"groups": groups}

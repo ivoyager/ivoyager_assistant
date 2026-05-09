@@ -55,9 +55,42 @@ func get_method_names() -> Array[String]:
 	return []
 
 
-## Return capability strings for [code]get_project_info[/code].
+## Return capability strings for [code]get_project_info[/code]. Most suites can
+## leave this empty: the server already advertises every active (non-gated)
+## method name in [code]capabilities[/code]. Override only to add feature-group
+## identifiers (e.g. [code]"mouse_hover"[/code]) that aren't method names.
 func get_capabilities() -> Array[String]:
 	return []
+
+
+## Per-method requirement tokens. Map<method_name, Array[String]>.
+##
+## Methods absent from the returned dict are unconditionally available. Methods
+## listed with one or more tokens are dropped from the dispatch table (and
+## reported under [code]gated_out[/code] in [code]get_project_info[/code]) when
+## any token resolves false at load time or at simulator start.
+##
+## Token vocabulary is defined by [code]IVAssistantServer.KNOWN_TOKENS[/code];
+## unknown tokens [code]push_error[/code] at suite load. See SPECIFICATION.md
+## §7.5 for the canonical list and resolution rules.
+func get_method_requirements() -> Dictionary:
+	return {}
+
+
+## Optional human-readable summaries for the v2 manifest. Map<method_name,
+## String>. Surfaces in [code]get_project_info[/code]'s [code]methods[/code]
+## map. Methods absent from the dict get an empty summary.
+func get_method_summaries() -> Dictionary:
+	return {}
+
+
+## Return false to opt this whole suite out of registration. Default true.
+## Use for all-or-nothing dependencies that don't fit the per-method
+## requirement vocabulary (e.g. an asteroid-only suite checking
+## [code]&"asteroids" in IVCoreSettings.body_tables[/code]). Called once after
+## [method _init_test_suite] and before methods are registered.
+func is_applicable() -> bool:
+	return true
 
 
 ## Whether this suite's methods require the simulator to be started.

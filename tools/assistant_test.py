@@ -323,8 +323,8 @@ class TestRunner:
         if self.skip_hover:
             self.skip("hover test skipped (--skip-hover)")
             return
-        if not self.has_cap("mouse_hover"):
-            self.skip("mouse_hover capability not available")
+        if not self.has_cap("mouse_target_id"):
+            self.skip("mouse_target_id capability not available")
             return
         if not self.has_cap("move_camera"):
             self.skip("move_camera unavailable; cannot stage hover test")
@@ -434,6 +434,9 @@ class TestRunner:
         # Identifies an asteroid POINT (FragmentIdentifier sbg-point branch);
         # text is the asteroid's stored name.
         print("  -- Asteroid point")
+        if not self.has_cap("small_bodies_id"):
+            self.skip("asteroid hover: small_bodies_id capability not available")
+            return
         resp = self.client.call("list_small_body_groups")
         if "error" in resp:
             self.skip("asteroid hover: list_small_body_groups failed")
@@ -454,8 +457,8 @@ class TestRunner:
             max_count = min(200, group["count"])
             for index in range(max_count):
                 proj_resp = self.client.call(
-                    "project_to_screen",
-                    {"small_body": {"group": group_name, "index": index}})
+                    "project_small_body_to_screen",
+                    {"group": group_name, "index": index})
                 if "error" in proj_resp:
                     continue
                 result = proj_resp.get("result", {})
