@@ -28,14 +28,15 @@ IVAssistantServer (autoload Node, root-level singleton)
   ├─ on core_initialized: starts TCPServer on localhost:29071
   ├─ on simulator_started: forwards to all test suites
   └─ _process(): polls TCP, reads JSON commands, dispatches, writes JSON responses
-       ├─ built-in: get_project_info, get_state, start_game, quit
-       └─ delegates to test suites for all other methods
+	   ├─ built-in: get_project_info, get_state, start_game, quit
+	   └─ delegates to test suites for all other methods
 
 IVAssistantTestSuite (RefCounted base class)
   ├─ StateQuerySuite: get_time, get_selection, get_camera, list_bodies, body queries
   ├─ ControlSuite: select_body, select_navigate, set_pause, set_speed, set_time,
   │                move_camera, show_hide_gui, list_actions, press_action
-  └─ CoreTestSuite: screenshot, save_game, load_game, get_save_status
+  ├─ CoreTestSuite: screenshot, save_game, load_game, get_save_status
+  └─ GuiInspectionSuite: find_nodes, inspect_node, read_node_text
 ```
 
 ### 2.3 Lifecycle
@@ -95,7 +96,6 @@ Newline-delimited JSON. Each message is a single line terminated by `\n`.
 | 3 | Body not found |
 | 4 | Simulator not ready (not started, or readiness gate not yet open) |
 | 5 | Operation not allowed |
-| 6 | Timeout |
 
 ## 4. API Methods
 
@@ -282,6 +282,7 @@ Returns orbital elements.
   "inclination": 0.0,
   "longitude_ascending_node": -0.196,
   "argument_periapsis": 1.796,
+  "period": 3.156e7,
   "time": 7.889e8
 }
 ```
@@ -387,13 +388,6 @@ Show or hide all GUI panels. Emits `IVGlobal.show_hide_gui_requested` which is h
 
 **Result:** `{"ok": true, "visible": true}`
 
-#### `set_option` (Phase 4)
-Change a user setting.
-
-**Params:**
-- `setting` (string, required) — Setting name
-- `value` (variant, required) — New value
-
 ### 4.5 Save/Load (requires IVSave plugin)
 
 These methods are only available when the `ivoyager_save` plugin is present and enabled. They appear in `get_project_info` capabilities only when detected. If called without the plugin, they return error code 5 ("Save plugin not available").
@@ -480,11 +474,11 @@ Returns all registered input actions with their display names. Actions are defin
 ```json
 {
   "actions": {
-    "toggle_orbits": "Show/Hide Orbits",
-    "toggle_names": "Show/Hide Names",
-    "toggle_symbols": "Show/Hide Symbols",
-    "toggle_pause": "Toggle Pause",
-    "recenter": "Recenter",
+	"toggle_orbits": "Show/Hide Orbits",
+	"toggle_names": "Show/Hide Names",
+	"toggle_symbols": "Show/Hide Symbols",
+	"toggle_pause": "Toggle Pause",
+	"recenter": "Recenter",
     "..."
   }
 }
@@ -546,11 +540,11 @@ Recursively harvest all visible text content from a subtree in document order. T
 {
   "path": "/root/.../MyPanel",
   "entries": [
-    {"type": "tab_container", "name": "TabContainer", "current_tab": 0, "tab_names": ["Tab1", "Tab2"]},
-    {"type": "section", "title": "Section A", "folded": true},
-    {"type": "section", "title": "Section B", "folded": false},
-    {"type": "label", "name": "value_label", "text": "85"},
-    {"type": "label", "name": "rate_label", "text": "2.5"}
+	{"type": "tab_container", "name": "TabContainer", "current_tab": 0, "tab_names": ["Tab1", "Tab2"]},
+	{"type": "section", "title": "Section A", "folded": true},
+	{"type": "section", "title": "Section B", "folded": false},
+	{"type": "label", "name": "value_label", "text": "85"},
+	{"type": "label", "name": "rate_label", "text": "2.5"}
   ],
   "count": 5,
   "truncated": false
@@ -609,6 +603,7 @@ IVAssistantServer="../assistant_server.gd"
 StateQuerySuite="res://addons/ivoyager_assistant/test_suites/state_query_suite.gd"
 ControlSuite="res://addons/ivoyager_assistant/test_suites/control_suite.gd"
 CoreTestSuite="res://addons/ivoyager_assistant/test_suites/core_test_suite.gd"
+GuiInspectionSuite="res://addons/ivoyager_assistant/test_suites/gui_inspection_suite.gd"
 
 [assistant]
 port=29071
@@ -616,6 +611,7 @@ enabled=true
 debug_only=true
 assistant_name=""
 context_file=""
+min_ready_delay_frames=10
 ```
 
 ### 7.1 Autoload Registration
@@ -633,6 +629,7 @@ The `[assistant_test_suites]` section registers `IVAssistantTestSuite` subclasse
 | `StateQuerySuite` | `get_time`, `get_selection`, `get_camera`, `list_bodies`, `get_body_info`, `get_body_position`, `get_body_orbit`, `get_body_distance`, `get_body_state_vectors` |
 | `ControlSuite` | `select_body`, `select_navigate`, `set_pause`, `set_speed`, `set_time`, `move_camera`, `show_hide_gui`, `list_actions`, `press_action` |
 | `CoreTestSuite` | `screenshot`, `save_game`, `load_game`, `get_save_status` |
+| `GuiInspectionSuite` | `find_nodes`, `inspect_node`, `read_node_text` |
 
 **Override examples** (in `ivoyager_override.cfg` or `ivoyager_override2.cfg`):
 
@@ -680,7 +677,7 @@ Projects with cross-thread or deferred initialization that continues past `simul
 
 ```gdscript
 IVAssistantServer.ready_predicate = func() -> bool:
-    return MyProject.is_initialization_complete
+	return MyProject.is_initialization_complete
 ```
 
 The readiness gate stays closed until the predicate has returned `true` for `min_ready_delay_frames` consecutive frames (counted from the first frame the predicate returns `true`, not from `simulator_started`). If the predicate flips back to `false` while counting, the countdown resets. Once the gate has opened, it stays open until reset by `IVStateManager.about_to_free_procedural_nodes` (e.g. during a load).

@@ -92,23 +92,17 @@ func dispatch(method: String, params: Dictionary) -> Variant:
 			"message": "Unknown method: %s" % method}}
 
 
-func _select_body(params: Dictionary) -> Dictionary:
+func _select_body(params: Dictionary) -> Variant:
 	if !_selection_manager:
 		return {"_error": {"code": ERR_NOT_STARTED,
 				"message": "Selection manager not available"}}
 
-	var body_name: Variant = params.get("name")
-	if typeof(body_name) != TYPE_STRING or body_name == "":
-		return {"_error": {"code": ERR_INVALID_PARAMS,
-				"message": "Missing or invalid 'name' parameter"}}
+	var body_or_err: Variant = IVAssistantTestSuite.parse_body(params.get("name"), "name")
+	if body_or_err is Dictionary:
+		return body_or_err
+	var body: IVBody = body_or_err
 
-	var name_str: String = body_name
-	var sn := StringName(name_str)
-	if !IVBody.bodies.has(sn):
-		return {"_error": {"code": ERR_BODY_NOT_FOUND,
-				"message": "Body not found: %s" % body_name}}
-
-	_selection_manager.select_by_name(sn)
+	_selection_manager.select_by_name(body.name)
 	return {"ok": true}
 
 

@@ -43,7 +43,10 @@ var _listening := false # TCP server is active
 var _sim_started := false # simulator has started, program references cached
 var _is_ready := false # readiness gate is open
 var _ready_delay_counter := -1 # -1 = predicate not yet true; 0..N = countdown
+## Consecutive frames [member ready_predicate] must hold true before
+## [member _is_ready] flips. Configured via [code]ivoyager_assistant.cfg[/code].
 var _min_ready_delay_frames := 10
+var _save_singleton: Node # IVSave, if present (duck-typed)
 
 ## Project-supplied readiness condition. Polled each frame after
 ## [signal IVStateManager.simulator_started] fires; the readiness gate opens
@@ -77,6 +80,7 @@ func _ready() -> void:
 	var context_file: String = config.get_value("assistant", "context_file", "")
 	if context_file:
 		_context_content = _load_context_file(context_file)
+	_save_singleton = get_node_or_null(^"/root/IVSave")
 	_load_test_suites(config)
 	IVStateManager.core_initialized.connect(_on_core_initialized)
 	IVStateManager.simulator_started.connect(_on_simulator_started)
@@ -338,11 +342,10 @@ func _get_state() -> Dictionary:
 		result["speed_index"] = 0
 		result["speed_name"] = ""
 		result["reversed_time"] = false
-	var save_singleton: Node = get_node_or_null(^"/root/IVSave")
-	if save_singleton:
+	if _save_singleton:
 		@warning_ignore_start("unsafe_property_access")
-		var is_saving: bool = save_singleton.is_saving
-		var is_loading: bool = save_singleton.is_loading
+		var is_saving: bool = _save_singleton.is_saving
+		var is_loading: bool = _save_singleton.is_loading
 		@warning_ignore_restore("unsafe_property_access")
 		result["is_saving"] = is_saving
 		result["is_loading"] = is_loading

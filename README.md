@@ -4,6 +4,8 @@ AI assistant for accessible solar system navigation. Also provides AI interface 
 
 UNDER DEVELOPMENT!
 
+Today the TCP server (JSON-RPC on `localhost:29071`) is usable for AI-driven testing — state queries, body queries, controls, screenshots, save/load, action emulation, and generic GUI inspection. Accessibility features (voice control, screen reader, spatial audio) are planned.
+
 This plugin will provide an interface so that AI can navigate the solar system, change anything accessible in the GUI (options, HUDs visibilities and colors, etc.), know what's on screen, and check on what's happening elsewhere. The motivation is twofold:
 
 1. So AI can conduct tests (prerequisite to any serious AI-assisted coding).

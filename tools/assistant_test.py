@@ -206,8 +206,9 @@ class TestRunner:
         resp = self.client.call("get_state")
         result = resp.get("result", {})
         self.assert_true(result.get("started", False), "get_state: started")
-        self.assert_eq(result.get("is_saving", True), False, "get_state: not saving")
-        self.assert_eq(result.get("is_loading", True), False, "get_state: not loading")
+        # is_saving/is_loading are only present when IVSave plugin is enabled.
+        self.assert_eq(result.get("is_saving", False), False, "get_state: not saving")
+        self.assert_eq(result.get("is_loading", False), False, "get_state: not loading")
 
         # get_time
         if self.has_cap("get_time"):

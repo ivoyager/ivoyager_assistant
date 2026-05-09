@@ -99,6 +99,21 @@ static func parse_vector3(value: Variant, param_name: String) -> Variant:
 	return Vector3(x, y, z)
 
 
+## Parses a required body-name param into an [IVBody]. Returns the body on
+## success or an [code]_error[/code] [Dictionary] on failure. [param param_name]
+## is used in error messages.
+static func parse_body(value: Variant, param_name: String) -> Variant:
+	if typeof(value) != TYPE_STRING or value == "":
+		return {"_error": {"code": ERR_INVALID_PARAMS,
+				"message": "Missing or invalid '%s' parameter" % param_name}}
+	var name_str: String = value
+	var sn := StringName(name_str)
+	if !IVBody.bodies.has(sn):
+		return {"_error": {"code": ERR_BODY_NOT_FOUND,
+				"message": "Body not found: %s" % name_str}}
+	return IVBody.bodies[sn]
+
+
 ## Returns [param body]'s position summed up the parent chain at [param time]
 ## (in heliocentric coordinates for solar-system bodies).
 static func get_global_position(body: IVBody, time: float) -> Vector3:
