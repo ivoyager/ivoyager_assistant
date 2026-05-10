@@ -55,9 +55,42 @@ func get_method_names() -> Array[String]:
 	return []
 
 
-## Return capability strings for [code]get_project_info[/code].
+## Return capability strings for [code]get_project_info[/code]. Most suites can
+## leave this empty: the server already advertises every active (non-gated)
+## method name in [code]capabilities[/code]. Override only to add feature-group
+## identifiers (e.g. [code]"mouse_hover"[/code]) that aren't method names.
 func get_capabilities() -> Array[String]:
 	return []
+
+
+## Per-method requirement tokens. Map<method_name, Array[String]>.
+##
+## Methods absent from the returned dict are unconditionally available. Methods
+## listed with one or more tokens are dropped from the dispatch table (and
+## reported under [code]gated_out[/code] in [code]get_project_info[/code]) when
+## any token resolves false at load time or at simulator start.
+##
+## Token vocabulary is defined by [code]IVAssistantServer.KNOWN_TOKENS[/code];
+## unknown tokens [code]push_error[/code] at suite load. See SPECIFICATION.md
+## §7.5 for the canonical list and resolution rules.
+func get_method_requirements() -> Dictionary:
+	return {}
+
+
+## Optional human-readable summaries for the v2 manifest. Map<method_name,
+## String>. Surfaces in [code]get_project_info[/code]'s [code]methods[/code]
+## map. Methods absent from the dict get an empty summary.
+func get_method_summaries() -> Dictionary:
+	return {}
+
+
+## Return false to opt this whole suite out of registration. Default true.
+## Use for all-or-nothing dependencies that don't fit the per-method
+## requirement vocabulary (e.g. an asteroid-only suite checking
+## [code]&"asteroids" in IVCoreSettings.body_tables[/code]). Called once after
+## [method _init_test_suite] and before methods are registered.
+func is_applicable() -> bool:
+	return true
 
 
 ## Whether this suite's methods require the simulator to be started.
@@ -97,6 +130,21 @@ static func parse_vector3(value: Variant, param_name: String) -> Variant:
 	var y: float = arr[1]
 	var z: float = arr[2]
 	return Vector3(x, y, z)
+
+
+## Parses a required body-name param into an [IVBody]. Returns the body on
+## success or an [code]_error[/code] [Dictionary] on failure. [param param_name]
+## is used in error messages.
+static func parse_body(value: Variant, param_name: String) -> Variant:
+	if typeof(value) != TYPE_STRING or value == "":
+		return {"_error": {"code": ERR_INVALID_PARAMS,
+				"message": "Missing or invalid '%s' parameter" % param_name}}
+	var name_str: String = value
+	var sn := StringName(name_str)
+	if !IVBody.bodies.has(sn):
+		return {"_error": {"code": ERR_BODY_NOT_FOUND,
+				"message": "Body not found: %s" % name_str}}
+	return IVBody.bodies[sn]
 
 
 ## Returns [param body]'s position summed up the parent chain at [param time]

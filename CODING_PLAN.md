@@ -1,248 +1,61 @@
 # I, Voyager Assistant — Coding Plan
 
-## Phase 1: TCP Server and Basic Testing Interface
+## Status
 
-**Goal:** Enable Claude Code to connect to the running simulation, query state, and exercise basic controls. This is the prerequisite for AI-assisted development testing.
+v0.0.1.dev. The TCP server, modular test suite architecture, and the generic state / control / body / camera / time / selection / speed / save / load / GUI-inspection / screenshot / action-emulation APIs are all in place, plus a Python test runner. Remaining work centers on settings/HUD typed APIs and accessibility.
 
-### Step 1.1: EditorPlugin Autoload Registration ✓
+For the per-method addition history, see `CHANGELOG.md`. For the protocol and configuration reference, see `SPECIFICATION.md`.
 
-**File:** `addons/ivoyager_assistant/editor/editor_plugin.gd`
+## Completed
 
-- EditorPlugin registers `IVAssistantServer` as an autoload via `add_autoload_singleton()` when the plugin is enabled
-- Removes the autoload in `_exit_tree()` when the plugin is disabled
-- No project-level config changes needed — developers just enable the plugin in Project Settings → Plugins
+- **Phase 1–2** — TCP server + JSON-RPC protocol; state/body/camera/time/selection/speed APIs; basic controls (`select_body`, `set_pause`, `set_speed`); EditorPlugin autoload registration.
+- **Phase 2.5 — Cross-project compatibility** — two-phase startup (`core_initialized` → `simulator_started`); `get_project_info`, `start_game`; `assistant_name` / `context_file` config keys; graceful sim reset on `about_to_free_procedural_nodes`.
+- **Phase 3 — Testing utilities** — `screenshot` (with `hide_gui`), `show_hide_gui`, `get_body_state_vectors`.
+- **Phase 3b — Action emulation** — `list_actions`, `press_action`.
+- **Phase 3c — Modular test suite architecture** — `IVAssistantTestSuite` RefCounted base class, `[assistant_test_suites]` config section, four default suites; server reduced to TCP infrastructure plus four built-in methods.
+- **GUI inspection** (`GuiInspectionSuite`) — `find_nodes`, `inspect_node`, `read_node_text`. Generic scene-tree introspection that subsumes much of the originally planned Phase 4.
+- **Save/load** (in `CoreTestSuite`) — `save_game`, `load_game`, `get_save_status`. Available only when `ivoyager_save` is present.
+- **Readiness gate** — `ready_predicate` + `min_ready_delay_frames` + `IVAssistantServer.is_ready()`. Lets projects with deferred main-thread initialization gate save/load and similar operations until state has settled.
+- **Test runner** — `tools/assistant_test.py` implements the SPECIFICATION.md §9.3 sequence; capability-aware, skips unsupported features.
+- **Phase 3d — Mouse hover identification** (`MouseHoverSuite`) — `warp_mouse`, `project_to_screen`, `get_hover_target`. Lets tests verify that hovering at a given screen position identifies the expected element by reading `IVMouseTargetLabel.text`. The suite never references `IVFragmentIdentifier` directly, so it serves as a regression safety net for the upcoming replacement of that class with a more efficient identifier (e.g. Compositors-based) — tests written today should continue to pass after the swap, validating that the user-visible effect is preserved.
 
-### Step 1.2: Create IVAssistantServer Node ✓
+## Next: Phase 4 — Settings & HUD typed API
 
-**File:** `addons/ivoyager_assistant/assistant_server.gd`
+**Goal:** add typed, named accessors for user settings and HUD state, complementing the generic `find_nodes` / `inspect_node` introspection that already exists.
 
-- Extends `Node`, registered as autoload `IVAssistantServer`
-- `_ready()`: reads config from `ivoyager_assistant.cfg` (with overrides), checks `enabled`/`debug_only`, connects to `IVStateManager` signals
-- `_on_core_initialized()`: create and start `TCPServer` on configured port
-- `_on_simulator_started()`: cache program references, enable full API
-- `_process()`:
-  - Accept new connections from `_tcp_server.take_connection()`
-  - For each client: read available bytes, append to buffer, extract complete lines (split on `\n`)
-  - Parse each complete line as JSON, dispatch to handler method, write JSON response + `\n`
-  - Remove disconnected clients
-- `_on_about_to_quit()`: stop server, disconnect clients
+`get_gui_state` from the original Phase 4 plan is **superseded** by the GUI inspection suite (`SPECIFICATION.md` §4.8) and is dropped. The remaining items:
 
-### Step 1.3: Implement State Queries
+### Step 4.1: Settings
 
-Implement these methods in AssistantServer:
+- **`set_option`** — Change a user setting via `IVSettingsManager`.
+  - **Params:** `setting` (string, required), `value` (variant, required).
+  - **Result:** `{"ok": true, "setting": "...", "value": ...}`.
+- **`get_options`** — Read current settings as a dict (or read a single setting if `setting` param is supplied).
 
-- **`get_state`** — Read `IVStateManager` flags (`started`, `running`, `paused_tree`, `paused_by_user`, `building_system`), `IVGlobal.times`, `IVGlobal.date`, `IVGlobal.clock`, speed info from `SpeedManager`
-- **`get_time`** — Detailed time from `Timekeeper` and `IVGlobal.times`
-- **`get_selection`** — Get `SelectionManager` from TopUI, read name, gui_name, body flags
-- **`list_bodies`** — Iterate `IVBody.bodies` keys, optionally filter by `BodyFlags`
+### Step 4.2: HUD toggles
 
-### Step 1.4: Implement Basic Controls
+- Toggle body labels, orbit lines, and asteroid visibility via `BodyHUDsState` / `SBGHUDsState` flags.
+- Likely shape: a single `set_huds` method that takes a dict of flag → bool, plus a `get_huds` reader. Final shape TBD when implementing.
 
-- **`select_body`** — Call `selection_manager.select_by_name()`
-- **`set_pause`** — Call `IVStateManager.set_user_paused()`
-- **`set_speed`** — Call `speed_manager.change_speed()`, `increment_speed()`, or `decrement_speed()`
+These are *typed* APIs — they expose state by named flag, not by GUI text. The generic `find_nodes` / `read_node_text` route remains the right tool for asserting that GUI text *renders* correctly; this Phase 4 is about programmatic state control.
 
-### Step 1.5: Add Configuration ✓
+## Next: Phase 5 — Accessibility
 
-`ivoyager_assistant.cfg` with autoload and runtime settings:
-```ini
-[assistant_autoload]
-IVAssistantServer="../assistant_server.gd"
+**Goal:** make the Planetarium navigable via voice control and screen readers.
 
-[assistant]
-port=29071
-enabled=true
-debug_only=true
-assistant_name=""
-context_file=""
-```
+Purely conceptual at this stage; no detailed API yet.
 
-### Step 1.6: Create Claude Code Helper Script
+### Step 5.1: Voice command interface
 
-**File:** `addons/ivoyager_assistant/tools/assistant_client.sh`
+- Design grammar mapping natural language to existing API methods.
+- Integration with speech-to-text services.
 
-A bash script wrapping netcat for easy command-line interaction:
-```
-Usage: ./assistant_client.sh <method> [params_json]
-Example: ./assistant_client.sh get_state
-Example: ./assistant_client.sh select_body '{"name":"PLANET_MARS"}'
-```
+### Step 5.2: Screen reader support
 
-### Step 1.7: Basic Smoke Test
+- Text descriptions of current view and selected body.
+- Announce state changes.
 
-After Phase 1 implementation, verify by:
-1. Run the Planetarium in Godot Editor (press Play)
-2. From a terminal, run: `echo '{"id":1,"method":"get_state"}' | nc localhost 29071`
-3. Verify JSON response with `started: true`, `running: true`
-4. Run: `echo '{"id":2,"method":"list_bodies","params":{"filter":"planets"}}' | nc localhost 29071`
-5. Verify response lists all 8 planets
-6. Run: `echo '{"id":3,"method":"select_body","params":{"name":"PLANET_MARS"}}' | nc localhost 29071`
-7. Verify Mars is selected in the GUI
+### Step 5.3: Spatial audio
 
----
-
-## Phase 2: Body Information and Camera Control ✓
-
-**Goal:** Enable querying detailed body properties and controlling the camera for comprehensive testing.
-
-### Step 2.1: Body Information Queries ✓
-
-- **`get_body_info`** — Returns `name`, `gui_name`, `flags`, `mean_radius`, `gravitational_parameter`, `parent`, `satellites`
-- **`get_body_position`** — Calls `body.get_position_vector(time)`, returns `[x, y, z]` position relative to parent
-- **`get_body_orbit`** — Returns `semi_major_axis`, `eccentricity`, `inclination`, `longitude_ascending_node`, `argument_periapsis`, `period` via IVOrbit element accessors
-- **`get_body_distance`** — Computes global positions by chaining parent positions up the tree, returns Euclidean distance
-
-### Step 2.2: Camera Control ✓
-
-- **`get_camera`** — Returns target, flags, view_position, view_rotations, is_camera_lock via `CameraHandler.get_camera_view_state()` plus viewport camera property
-- **`move_camera`** — Calls `CameraHandler.move_to_by_name()` or `move_to()` with optional target, view_position, view_rotations, instant parameters
-
-### Step 2.3: Time Control ✓
-
-- **`set_time`** — Three modes: absolute TT seconds via `Timekeeper.set_time()`, Gregorian date via `set_time_from_date_clock_elements()`, or OS sync via `synchronize_with_operating_system()`. Validates dates with `IVTimekeeper.is_valid_gregorian_date()`. Requires `IVCoreSettings.allow_time_setting == true`.
-
-### Step 2.4: Selection Navigation ✓
-
-- **`select_navigate`** — Maps 16 direction strings to `IVSelectionManager` navigation methods: up, down, next, last, next/last_planet, next/last_moon, next/last_major_moon, next/last_star, next/last_spacecraft, history_back, history_forward. Checks `has_*()` before calling `select_*()`.
-
----
-
-## Step 2.5: Cross-Project Compatibility ✓
-
-**Goal:** Make the assistant plugin usable across all I, Voyager projects (Planetarium, Project Template, Astropolis SDK) without code changes in the plugin.
-
-### Step 2.5.1: Two-Phase TCP Startup ✓
-
-Moved TCP server start from `simulator_started` to `core_initialized`. The server now listens before the simulation starts, which is critical for projects with splash screens (`wait_for_start = true`). Program object references are cached on `simulator_started`. Methods that need these objects check `_sim_started` and return `ERR_NOT_STARTED` if false.
-
-### Step 2.5.2: Project Identity and Context ✓
-
-Added config keys `assistant_name` and `context_file` to `ivoyager_assistant.cfg`. Read in `assistant_preinitializer.gd` and passed via static vars to `AssistantServer`. Context file content loaded at init time.
-
-### Step 2.5.3: New Method — get_project_info ✓
-
-Returns project name, version, assistant name, simulator state, config flags (`allow_time_setting`, `wait_for_start`), available capabilities array, and optional context content. Works before `simulator_started`.
-
-### Step 2.5.4: New Method — start_game ✓
-
-Calls `IVStateManager.start()` when `ok_to_start == true`. Enables AI clients to bypass splash screens for automated testing.
-
-### Step 2.5.5: Graceful Sim State Reset ✓
-
-`about_to_free_procedural_nodes` clears cached references and sets `_sim_started = false` without shutting down the TCP server. `about_to_quit` performs full TCP shutdown.
-
-### Step 2.5.6: Update Documentation and Client Script ✓
-
-Updated SPECIFICATION.md with new lifecycle, methods, config keys, and cross-project behavior section. Updated `assistant_client.sh` error message to be project-agnostic.
-
----
-
-## Phase 3: Testing Framework ✓
-
-**Goal:** Add utilities specifically designed for automated test scenarios.
-
-### Step 3.1: GUI Visibility (pulled forward from Phase 4) ✓
-
-- **`show_hide_gui`** — Emit `IVGlobal.show_hide_gui_requested`. Prerequisite for clean screenshots.
-
-### Step 3.2: Screenshot Capture ✓
-
-- **`screenshot`** — `get_viewport().get_texture().get_image().save_png(path)`
-- Returns file path and image size for Claude Code to read via the Read tool
-- Optional `hide_gui` parameter: temporarily hides GUI, forces a synchronous render via `RenderingServer.force_draw(true)`, captures, then restores GUI
-
-### Step 3.3: State Vectors ✓
-
-- **`get_body_state_vectors`** — Returns both position and velocity vectors relative to parent via `IVBody.get_state_vectors(time)`
-
-### Step 3.4: Test Window Resolution ✓
-
-- Updated CLAUDE.md launch command from `--resolution 800x600` to `--resolution 1920x1080` to give GUI panels proper room and produce meaningful screenshots
-
----
-
-## Phase 3b: Action Emulation ✓
-
-**Goal:** Emulate user hotkey actions programmatically, giving the Assistant access to all user-facing actions without dedicated API methods for each.
-
-### Step 3b.1: List Actions ✓
-
-- **`list_actions`** — Returns all registered input actions from `IVInputMapManager.defaults` with display names from `action_texts`
-
-### Step 3b.2: Press Action ✓
-
-- **`press_action`** — Injects a real `InputEventKey` into Godot's input pipeline via `Input.parse_input_event()`. Gets the action's registered keybinding from `InputMap.action_get_events()`, duplicates it, and injects press + release events. Flows through `_shortcut_input()` handlers exactly like a real key press.
-
----
-
-## Phase 3c: Modular Test Suite Architecture ✓
-
-**Goal:** Extract all API methods from `assistant_server.gd` into configurable test suite classes, enabling projects to add, replace, or remove entire suites of methods via `ivoyager_override.cfg`.
-
-### Step 3c.1: Base Class ✓
-
-- **`IVAssistantTestSuite`** (`assistant_test_suite.gd`) — RefCounted base class with error constants, lifecycle hooks (`_init_test_suite`, `_on_simulator_started`, `_on_about_to_free`), and virtual methods (`get_method_names`, `get_capabilities`, `requires_sim_started`, `dispatch`)
-
-### Step 3c.2: Extract State Queries ✓
-
-- **`StateQuerySuite`** (`test_suites/state_query_suite.gd`) — `get_time`, `get_selection`, `get_camera`, `list_bodies`, `get_body_info`, `get_body_position`, `get_body_orbit`, `get_body_distance`, `get_body_state_vectors`
-
-### Step 3c.3: Extract Controls ✓
-
-- **`ControlSuite`** (`test_suites/control_suite.gd`) — `select_body`, `select_navigate`, `set_pause`, `set_speed`, `set_time`, `move_camera`, `show_hide_gui`, `list_actions`, `press_action`
-
-### Step 3c.4: Extract Testing Utilities ✓
-
-- **`CoreTestSuite`** (`test_suites/core_test_suite.gd`) — `screenshot`, `save_game`, `load_game`, `get_save_status`. Returns `requires_sim_started() == false` since `get_save_status` works pre-sim.
-
-### Step 3c.5: Refactor Server ✓
-
-- `assistant_server.gd` reduced to TCP infrastructure + 4 built-in methods (`get_project_info`, `get_state`, `start_game`, `quit`)
-- Suite loading from `[assistant_test_suites]` config section
-- Dispatch delegates to `_method_to_suite` lookup, with `requires_sim_started()` check
-- Utility methods promoted to public: `parse_vector3()`, `get_global_position()`
-
-### Step 3c.6: Config and Documentation ✓
-
-- Added `[assistant_test_suites]` section to `ivoyager_assistant.cfg`
-- Updated SPECIFICATION.md with section 7.2 documenting the test suite system, override examples, and custom suite creation guide
-
----
-
-## Phase 4: GUI Manipulation
-
-**Goal:** Enable programmatic control of all GUI elements.
-
-### Step 4.1: GUI State
-
-- **`get_gui_state`** — Report visibility of panels
-
-### Step 4.2: Settings and Options
-
-- **`set_option`** — Change user settings via `IVSettingsManager`
-- **`get_options`** — Read current settings
-
-### Step 4.3: HUD Controls
-
-- Toggle body labels, orbit lines, asteroid visibility via `BodyHUDsState` and `SBGHUDsState`
-
----
-
-## Phase 5: Accessibility
-
-**Goal:** Make the Planetarium accessible via voice control and screen readers.
-
-### Step 5.1: Voice Command Interface
-
-- Design grammar mapping natural language to API methods
-- Integration with speech-to-text services
-
-### Step 5.2: Screen Reader Support
-
-- Text descriptions of current view and selected body
-- Announce state changes
-
-### Step 5.3: Spatial Audio
-
-- Audio cues for body positions relative to camera
-- Directional feedback for navigation
+- Audio cues for body positions relative to camera.
+- Directional feedback for navigation.

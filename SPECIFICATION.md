@@ -28,14 +28,17 @@ IVAssistantServer (autoload Node, root-level singleton)
   ├─ on core_initialized: starts TCPServer on localhost:29071
   ├─ on simulator_started: forwards to all test suites
   └─ _process(): polls TCP, reads JSON commands, dispatches, writes JSON responses
-       ├─ built-in: get_project_info, get_state, start_game, quit
-       └─ delegates to test suites for all other methods
+	   ├─ built-in: get_project_info, get_state, start_game, quit
+	   └─ delegates to test suites for all other methods
 
 IVAssistantTestSuite (RefCounted base class)
   ├─ StateQuerySuite: get_time, get_selection, get_camera, list_bodies, body queries
   ├─ ControlSuite: select_body, select_navigate, set_pause, set_speed, set_time,
   │                move_camera, show_hide_gui, list_actions, press_action
-  └─ CoreTestSuite: screenshot, save_game, load_game, get_save_status
+  ├─ CoreTestSuite: screenshot, save_game, load_game, get_save_status
+  ├─ GuiInspectionSuite: find_nodes, inspect_node, read_node_text
+  └─ MouseHoverSuite: warp_mouse, project_to_screen, get_hover_target,
+					  list_small_body_groups
 ```
 
 ### 2.3 Lifecycle
@@ -95,7 +98,6 @@ Newline-delimited JSON. Each message is a single line terminated by `\n`.
 | 3 | Body not found |
 | 4 | Simulator not ready (not started, or readiness gate not yet open) |
 | 5 | Operation not allowed |
-| 6 | Timeout |
 
 ## 4. API Methods
 
@@ -282,6 +284,7 @@ Returns orbital elements.
   "inclination": 0.0,
   "longitude_ascending_node": -0.196,
   "argument_periapsis": 1.796,
+  "period": 3.156e7,
   "time": 7.889e8
 }
 ```
@@ -387,13 +390,6 @@ Show or hide all GUI panels. Emits `IVGlobal.show_hide_gui_requested` which is h
 
 **Result:** `{"ok": true, "visible": true}`
 
-#### `set_option` (Phase 4)
-Change a user setting.
-
-**Params:**
-- `setting` (string, required) — Setting name
-- `value` (variant, required) — New value
-
 ### 4.5 Save/Load (requires IVSave plugin)
 
 These methods are only available when the `ivoyager_save` plugin is present and enabled. They appear in `get_project_info` capabilities only when detected. If called without the plugin, they return error code 5 ("Save plugin not available").
@@ -480,11 +476,11 @@ Returns all registered input actions with their display names. Actions are defin
 ```json
 {
   "actions": {
-    "toggle_orbits": "Show/Hide Orbits",
-    "toggle_names": "Show/Hide Names",
-    "toggle_symbols": "Show/Hide Symbols",
-    "toggle_pause": "Toggle Pause",
-    "recenter": "Recenter",
+	"toggle_orbits": "Show/Hide Orbits",
+	"toggle_names": "Show/Hide Names",
+	"toggle_symbols": "Show/Hide Symbols",
+	"toggle_pause": "Toggle Pause",
+	"recenter": "Recenter",
     "..."
   }
 }
@@ -546,11 +542,11 @@ Recursively harvest all visible text content from a subtree in document order. T
 {
   "path": "/root/.../MyPanel",
   "entries": [
-    {"type": "tab_container", "name": "TabContainer", "current_tab": 0, "tab_names": ["Tab1", "Tab2"]},
-    {"type": "section", "title": "Section A", "folded": true},
-    {"type": "section", "title": "Section B", "folded": false},
-    {"type": "label", "name": "value_label", "text": "85"},
-    {"type": "label", "name": "rate_label", "text": "2.5"}
+	{"type": "tab_container", "name": "TabContainer", "current_tab": 0, "tab_names": ["Tab1", "Tab2"]},
+	{"type": "section", "title": "Section A", "folded": true},
+	{"type": "section", "title": "Section B", "folded": false},
+	{"type": "label", "name": "value_label", "text": "85"},
+	{"type": "label", "name": "rate_label", "text": "2.5"}
   ],
   "count": 5,
   "truncated": false
@@ -573,6 +569,92 @@ Recursively harvest all visible text content from a subtree in document order. T
 5. `read_node_text` with that path — harvest visible text
 6. Analyze entries for non-empty values, reasonable numeric ranges, correct section titles
 
+### 4.9 Mouse Hover Identification
+
+Three primitives for verifying the user-visible effect of any system that identifies on-screen elements at the mouse position (today this is `IVFragmentIdentifier`'s shader-encoded ids on asteroid points and orbit lines). Capability: `mouse_hover`.
+
+This suite intentionally observes [`IVMouseTargetLabel.text`](../ivoyager_core/ui/mouse_target_label.gd) — the label the user actually sees — rather than any specific identifier API. Tests written against these methods remain valid across replacement of the underlying identification mechanism (e.g. a future Compositors-based system replacing `IVFragmentIdentifier`).
+
+#### `warp_mouse`
+Synthesize an `InputEventMouseMotion` at a viewport pixel position. Updates `IVWorldController.mouse_position` (and any other input subscribers) the same way an OS-generated mouse event would, without moving the visible OS cursor.
+
+**Params:**
+- `position` (array, required) — `[x, y]` in viewport pixel coordinates
+
+**Result:**
+```json
+{"ok": true, "position": [640.0, 360.0]}
+```
+
+#### `project_to_screen`
+Project a 3D world position to a viewport pixel via the active `Camera3D.unproject_position()`. Use to find good test coordinates for hover assertions: project a body for body-pixel hover, project a body at a future time to land on its orbit line, project an asteroid for SBG-point hover.
+
+**Params (exactly one of `body`, `world_position`, or `small_body` required):**
+- `body` (string) — Body name; projects the body's current Node3D `global_position` (already in Godot scene-tree world coordinates).
+- `time` (float, optional, only with `body`) — TT J2000 seconds. When supplied, projects the body's position at that time (computed by walking the parent chain, summing each ancestor's per-parent local orbit position, and anchoring at the topmost body's `global_position`). A `time` other than current places the projected pixel on the body's orbit line where the body itself isn't — the hook for orbit-line hover testing.
+- `world_position` (array) — `[x, y, z]` in Godot scene-tree world coordinates (the same space as any `Node3D.global_position` in the scene). Note: position values returned by `get_body_position` / `get_body_state_vectors` are in Godot scene-tree units relative to the body's parent (not heliocentric world); anchor them by adding the parent body's `global_position` if you need world-space input here.
+- `small_body` (object) — Asteroid in an [`IVSmallBodiesGroup`](../ivoyager_core/tree/small_bodies_group.gd) by index, with sub-keys:
+  - `group` (string, required) — SBG name (discover via `list_small_body_groups`).
+  - `index` (int, required) — Element index within the group, `[0, count)`.
+
+  Projects the asteroid's current heliocentric position, computed from its stored Keplerian elements (precession ignored — see "Limitations" below). Lagrange-point (Trojan) groups are not supported and return ERR_INVALID_PARAMS.
+
+**Result:**
+```json
+{
+  "position": [820.5, 412.0],
+  "on_screen": true,
+  "behind_camera": false,
+  "world_position_used": [-329046784.0, 235556144.0, -161255408.0]
+}
+```
+
+For `small_body`, the response also includes `"name": "<asteroid name>"` (the entry from `IVSmallBodiesGroup.names`). `on_screen` is `true` only when `behind_camera` is `false` AND the projected pixel is inside the viewport rect. `world_position_used` is the Godot scene-tree world coordinate that was projected — useful for diagnosing scale or anchoring mismatches when projections land off-screen unexpectedly.
+
+**Limitations of asteroid projection:**
+- Trojan / Lagrange-point groups (`lp_integer != -1`) are rejected; their librating positions need a different model.
+- Precession of LAN and AP (rates from `IVSmallBodiesGroup.s_g_mag_de`) is not applied. For main-belt asteroids the per-decade drift is well within `IVFragmentIdentifier`'s ~9-pixel sample radius, so the projected pixel still falls inside the rendered point's identification grid for typical sim time deltas from epoch.
+
+#### `list_small_body_groups`
+Enumerate loaded `IVSmallBodiesGroup` instances. Useful for discovering valid `small_body.group` values for `project_to_screen`.
+
+**Params:** none
+
+**Result:**
+```json
+{
+  "groups": [
+	{"name": "MPC_NEAR_EARTH_OBJECTS", "alias": "NEAs", "count": 1234, "lp_integer": -1},
+	{"name": "JT4", "alias": "JT4", "count": 5678, "lp_integer": 4}
+  ]
+}
+```
+
+`lp_integer` is `-1` for normal heliocentric groups; `4` or `5` for Jupiter Trojans (L4/L5). Trojan groups cannot be passed to `project_to_screen` (see Limitations above).
+
+#### `get_hover_target`
+Return the current state of `IVMouseTargetLabel` — the user-visible identification of whatever shader element is under the mouse.
+
+**Params:** none
+
+**Result:**
+```json
+{
+  "text": "Mars (orbit)",
+  "visible": true,
+  "mouse_position": [830.0, 412.0]
+}
+```
+
+**Timing note:** `IVFragmentIdentifier` samples a SubViewport and runs an 8-frame calibration/value cycle before reporting an id. Allow ~250–400 ms (≥ ~16 frames at 60 Hz, doubling the cycle length for safety) between `warp_mouse` and the first reliable `get_hover_target` reading. Replacement implementations may have different timing — clients should poll `get_hover_target` until the text stabilizes rather than relying on a fixed delay.
+
+**Recommended hover-test workflow:**
+1. `move_camera` to a vantage point that puts the test target on-screen.
+2. Wait ~1 s for camera and HUDs to settle.
+3. `project_to_screen` with `body` to get the body's projected pixel.
+4. `warp_mouse` to that pixel (or a small offset for orbit-line tests).
+5. Sleep / poll briefly; call `get_hover_target` and assert on `text`.
+
 ## 5. Core API Dependencies
 
 The AssistantServer reads from and writes to these core objects:
@@ -588,6 +670,10 @@ The AssistantServer reads from and writes to these core objects:
 | `SpeedManager` | Via `IVGlobal.program[&"SpeedManager"]` | Speed index, `change_speed()` |
 | `Timekeeper` | Via `IVGlobal.program[&"Timekeeper"]` | Time queries and `set_time()` |
 | `CameraHandler` | Via `IVGlobal.program[&"CameraHandler"]` | Camera state and `move_to()` |
+| `IVMouseTargetLabel` | Found under `IVGlobal.program[&"TopUI"]` | Read `text` / `visible` for hover-target identification (independent of the underlying identifier mechanism) |
+| `Camera3D` | Via `Viewport.get_camera_3d()` | `unproject_position()` for world-to-screen projection |
+| `IVSmallBodiesGroup` | Static `small_bodies_groups` registry + `get_orbit_elements()` / `names` | Asteroid enumeration and per-asteroid Keplerian elements for `project_to_screen {small_body}` |
+| `IVOrbit` | Static `get_true_anomaly_from_mean_anomaly_elliptic()` and `get_position_from_elements_at_true_anomaly()` | Asteroid position from elements at current sim time |
 | `IVSave` | Autoload singleton (optional) | Save/load operations, save status queries (duck-typed) |
 
 ## 6. Threading and Safety
@@ -609,6 +695,7 @@ IVAssistantServer="../assistant_server.gd"
 StateQuerySuite="res://addons/ivoyager_assistant/test_suites/state_query_suite.gd"
 ControlSuite="res://addons/ivoyager_assistant/test_suites/control_suite.gd"
 CoreTestSuite="res://addons/ivoyager_assistant/test_suites/core_test_suite.gd"
+GuiInspectionSuite="res://addons/ivoyager_assistant/test_suites/gui_inspection_suite.gd"
 
 [assistant]
 port=29071
@@ -616,6 +703,7 @@ enabled=true
 debug_only=true
 assistant_name=""
 context_file=""
+min_ready_delay_frames=10
 ```
 
 ### 7.1 Autoload Registration
@@ -633,6 +721,9 @@ The `[assistant_test_suites]` section registers `IVAssistantTestSuite` subclasse
 | `StateQuerySuite` | `get_time`, `get_selection`, `get_camera`, `list_bodies`, `get_body_info`, `get_body_position`, `get_body_orbit`, `get_body_distance`, `get_body_state_vectors` |
 | `ControlSuite` | `select_body`, `select_navigate`, `set_pause`, `set_speed`, `set_time`, `move_camera`, `show_hide_gui`, `list_actions`, `press_action` |
 | `CoreTestSuite` | `screenshot`, `save_game`, `load_game`, `get_save_status` |
+| `GuiInspectionSuite` | `find_nodes`, `inspect_node`, `read_node_text` |
+| `MouseTargetIdSuite` | `warp_mouse`, `project_to_screen`, `get_hover_target` |
+| `SmallBodiesIdSuite` | `project_small_body_to_screen`, `list_small_body_groups` |
 
 **Override examples** (in `ivoyager_override.cfg` or `ivoyager_override2.cfg`):
 
@@ -654,7 +745,10 @@ Setting a suite to `null` or `""` removes it. Adding a new key registers a new s
 
 Extend `IVAssistantTestSuite` and override:
 - `get_method_names()` — Return the method names your suite handles
-- `get_capabilities()` — Return capability strings for `get_project_info`
+- `get_method_requirements()` — Map<method_name, Array[String]> of requirement tokens (see §7.5). Methods whose tokens evaluate false at load time (or at `simulator_started`, for widget tokens) are dropped from the dispatch table and reported in `gated_out`.
+- `get_method_summaries()` — Optional Map<method_name, String> of one-line summaries surfaced in the `methods` field of `get_project_info`.
+- `is_applicable()` — Return `false` to opt out of the entire suite. Use for all-or-nothing dependencies that don't fit the per-method token vocabulary (e.g. an asteroid-only suite checking `&"asteroids" in IVCoreSettings.body_tables`).
+- `get_capabilities()` — Return additional capability strings (feature-group identifiers, e.g. `"mouse_hover"`) that aren't method names. Most suites can leave this empty: the server already advertises every active method name in `capabilities`.
 - `dispatch(method, params)` — Handle method calls, return result or `_error` dict
 - `requires_sim_started()` — Return `false` if some methods work before sim starts (default: `true`)
 - `_on_simulator_started()` / `_on_about_to_free()` — Cache/clear program references
@@ -680,7 +774,7 @@ Projects with cross-thread or deferred initialization that continues past `simul
 
 ```gdscript
 IVAssistantServer.ready_predicate = func() -> bool:
-    return MyProject.is_initialization_complete
+	return MyProject.is_initialization_complete
 ```
 
 The readiness gate stays closed until the predicate has returned `true` for `min_ready_delay_frames` consecutive frames (counted from the first frame the predicate returns `true`, not from `simulator_started`). If the predicate flips back to `false` while counting, the countdown resets. Once the gate has opened, it stays open until reset by `IVStateManager.about_to_free_procedural_nodes` (e.g. during a load).
@@ -689,20 +783,61 @@ The default predicate is trivially `true`, so projects that don't set `ready_pre
 
 Test suites that opt out of the suite-wide gate (`requires_sim_started()` returns `false`) can still consult the gate per-method via `IVAssistantServer.is_ready()`. The bundled `CoreTestSuite` uses this for `save_game` and `load_game` so save/load races against deferred initialization are blocked even when the suite handles other methods (e.g. `get_save_status`) pre-simulator.
 
+### 7.5 Requirement-Token Vocabulary
+
+`IVAssistantTestSuite.get_method_requirements()` returns a Map<method_name, Array[String]>. Each string is a requirement token from the closed vocabulary defined in `IVAssistantServer.KNOWN_TOKENS`. Unknown tokens `push_error` at suite load and are dropped (the method is then registered as unconditionally available, matching the suite-author's intent of "no recognized restriction").
+
+A method is **active** (callable, listed in `capabilities`, listed under `methods` in `get_project_info`) iff every token in its requirement list resolves true. Methods with at least one unmet token are dropped from the dispatch table — calling one returns `ERR_UNKNOWN_METHOD`, identical to a never-implemented method — and are listed under `gated_out` in `get_project_info` with the unmet token names.
+
+The vocabulary:
+
+| Token | Resolves to |
+|---|---|
+| `core.allow_time_setting` | `IVCoreSettings.allow_time_setting` |
+| `core.allow_time_reversal` | `IVCoreSettings.allow_time_reversal` |
+| `program.TopUI` | `IVGlobal.program.has(&"TopUI")` |
+| `program.SpeedManager` | `IVGlobal.program.has(&"SpeedManager")` |
+| `program.Timekeeper` | `IVGlobal.program.has(&"Timekeeper")` |
+| `program.CameraHandler` | `IVGlobal.program.has(&"CameraHandler")` |
+| `autoload.IVSave` | autoload at `/root/IVSave` is present |
+| `body_table.stars` | `&"stars" in IVCoreSettings.body_tables` |
+| `body_table.planets` | `&"planets" in IVCoreSettings.body_tables` |
+| `body_table.moons` | `&"moons" in IVCoreSettings.body_tables` |
+| `body_table.asteroids` | `&"asteroids" in IVCoreSettings.body_tables` |
+| `body_table.spacecrafts` | `&"spacecrafts" in IVCoreSettings.body_tables` |
+| `widget.MouseTargetLabel` | `IVMouseTargetLabel` reachable under `program.TopUI` after `simulator_started` |
+| `runtime.IVSmallBodiesGroup` | `IVSmallBodiesGroup.small_bodies_groups` non-empty after `simulator_started` |
+
+`core.*`, `program.*`, `autoload.*`, and `body_table.*` tokens resolve at `core_initialized` time (when suites load). `widget.*` and `runtime.*` tokens are evaluated against post-init state on `simulator_started`; before sim start they resolve false (the gated method is not active). After sim start the gating refreshes once. Clients querying `get_project_info` before vs after `start_game` see different `capabilities` / `gated_out` lists for those tokens — the post-start query is authoritative.
+
+Suites that need a coarser opt-out than the per-method vocabulary supports can override `is_applicable() -> bool` to short-circuit registration entirely. The check fires once at `core_initialized`, so `is_applicable()` is the right tool for config-driven all-or-nothing decisions (e.g. a flag in `IVCoreSettings` that a project sets in its preinitializer). For runtime conditions known only after the system tree is built, use a per-method `runtime.*` requirement instead.
+
+To extend the vocabulary, add an entry to `KNOWN_TOKENS` and a corresponding case in `_evaluate_token()` in `assistant_server.gd`. Tokens are stringly-typed and validated at suite load, so typos in suite code surface immediately as a `push_error`.
+
 ## 8. Cross-Project Compatibility
 
 The plugin is designed as a git submodule usable across any I, Voyager project. Enable the plugin in Project Settings → Plugins — no project-level config changes are needed.
 
 ### 8.1 Feature Availability
 
-Not all projects support all features. The `capabilities` array returned by `get_project_info` tells the client which methods are available. Capability detection is based on:
+Not all projects support all features. `get_project_info` returns three related fields that describe the current configuration:
 
-- **Program objects**: Methods requiring `TopUI`, `CameraHandler`, `SpeedManager`, or `Timekeeper` are only listed if those objects are registered.
-- **Settings**: `set_time` requires `IVCoreSettings.allow_time_setting == true`.
-- **Project type**: `start_game` is only listed for projects with `IVCoreSettings.wait_for_start == true`.
-- **Plugins**: `save_game`, `load_game`, and `get_save_status` are only listed when the `ivoyager_save` plugin is present.
+- `capabilities` — Flat string array of every active method name plus suite-supplied feature flags (e.g. `"mouse_hover"`). This is the canonical source for AI clients deciding whether to call a method.
+- `methods` — Map<method_name, {summary?: String}> covering every active method. The shape is reserved for future per-method metadata; today only the optional `summary` is populated.
+- `gated_out` — Array of `{"method": String, "unmet": Array[String]}` entries, one per registered-but-currently-unavailable method, naming the requirement tokens that resolved false. Lets clients distinguish "this build doesn't support X" from "X doesn't exist."
 
-Methods not in the capabilities list will return appropriate error codes (ERR_NOT_STARTED or ERR_NOT_ALLOWED) if called.
+Gating is driven by the per-method requirement-token vocabulary (see §7.5). Concretely:
+
+- **Program objects**: Methods declaring `program.TopUI`, `program.CameraHandler`, `program.SpeedManager`, or `program.Timekeeper` only activate when those program objects are registered.
+- **Settings**: `set_time` declares `core.allow_time_setting`, so it activates only when `IVCoreSettings.allow_time_setting == true`.
+- **Project type**: `start_game` is hard-coded into `capabilities` only for projects with `IVCoreSettings.wait_for_start == true`.
+- **Plugins**: `save_game`, `load_game`, and `get_save_status` declare `autoload.IVSave`, so they activate only when the `ivoyager_save` plugin is present.
+- **Small-bodies groups**: `SmallBodiesIdSuite`'s `project_small_body_to_screen` and `list_small_body_groups` declare `runtime.IVSmallBodiesGroup`. They activate only after `simulator_started` if `IVSmallBodiesGroup.small_bodies_groups` has at least one entry — i.e. the project's `small_bodies_groups` table has any non-`skip` rows and `IVTableSystemBuilder.add_small_bodies_groups` is true. (This is **not** the same as `body_table.asteroids`: that flag controls whether the few "explored" asteroids are loaded as `IVBody` instances; the SBG point clouds the suite actually targets are populated from the separate `small_bodies_groups` table.)
+- **Widgets**: `get_hover_target` declares `widget.MouseTargetLabel` and activates only after `simulator_started` if an `IVMouseTargetLabel` is reachable under `program.TopUI`.
+
+Calling a gated-out method returns `ERR_UNKNOWN_METHOD`. The protocol intentionally collapses "method not implemented" and "method gated out by configuration" into the same error: a missing capability looks identical to a never-implemented one, which is what clients should treat it as. The `gated_out` list is informational — clients that want to explain *why* a method is unavailable can read it.
+
+The manifest version is reported as `assistant_protocol_version` (currently `2`); fields are added additively across versions.
 
 ### 8.2 Splash Screen Handling
 

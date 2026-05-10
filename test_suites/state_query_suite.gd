@@ -53,17 +53,11 @@ func get_method_names() -> Array[String]:
 	]
 
 
-func get_capabilities() -> Array[String]:
-	var caps: Array[String] = [
-		"get_time", "list_bodies",
-		"get_body_info", "get_body_position", "get_body_orbit",
-		"get_body_distance", "get_body_state_vectors",
-	]
-	if IVGlobal.program.has(&"TopUI"):
-		caps.append("get_selection")
-	if IVGlobal.program.has(&"CameraHandler"):
-		caps.append("get_camera")
-	return caps
+func get_method_requirements() -> Dictionary:
+	return {
+		"get_selection": ["program.TopUI"],
+		"get_camera": ["program.CameraHandler"],
+	}
 
 
 func dispatch(method: String, params: Dictionary) -> Variant:
@@ -194,19 +188,11 @@ func _get_camera() -> Dictionary:
 	}
 
 
-func _get_body_info(params: Dictionary) -> Dictionary:
-	var body_name: Variant = params.get("name")
-	if typeof(body_name) != TYPE_STRING or body_name == "":
-		return {"_error": {"code": ERR_INVALID_PARAMS,
-				"message": "Missing or invalid 'name' parameter"}}
-
-	var name_str: String = body_name
-	var sn := StringName(name_str)
-	if !IVBody.bodies.has(sn):
-		return {"_error": {"code": ERR_BODY_NOT_FOUND,
-				"message": "Body not found: %s" % name_str}}
-
-	var body: IVBody = IVBody.bodies[sn]
+func _get_body_info(params: Dictionary) -> Variant:
+	var body_or_err: Variant = IVAssistantTestSuite.parse_body(params.get("name"), "name")
+	if body_or_err is Dictionary:
+		return body_or_err
+	var body: IVBody = body_or_err
 
 	var parent_name := ""
 	if body.parent:
@@ -216,6 +202,7 @@ func _get_body_info(params: Dictionary) -> Dictionary:
 	for sat_name: StringName in body.satellites:
 		sat_names.append(String(sat_name))
 
+	var name_str := String(body.name)
 	return {
 		"name": name_str,
 		"gui_name": tr(name_str),
@@ -227,17 +214,11 @@ func _get_body_info(params: Dictionary) -> Dictionary:
 	}
 
 
-func _get_body_position(params: Dictionary) -> Dictionary:
-	var body_name: Variant = params.get("name")
-	if typeof(body_name) != TYPE_STRING or body_name == "":
-		return {"_error": {"code": ERR_INVALID_PARAMS,
-				"message": "Missing or invalid 'name' parameter"}}
-
-	var name_str: String = body_name
-	var sn := StringName(name_str)
-	if !IVBody.bodies.has(sn):
-		return {"_error": {"code": ERR_BODY_NOT_FOUND,
-				"message": "Body not found: %s" % name_str}}
+func _get_body_position(params: Dictionary) -> Variant:
+	var body_or_err: Variant = IVAssistantTestSuite.parse_body(params.get("name"), "name")
+	if body_or_err is Dictionary:
+		return body_or_err
+	var body: IVBody = body_or_err
 
 	var time_val := NAN
 	var time_var: Variant = params.get("time")
@@ -248,7 +229,6 @@ func _get_body_position(params: Dictionary) -> Dictionary:
 		var time_num: float = time_var
 		time_val = time_num
 
-	var body: IVBody = IVBody.bodies[sn]
 	var pos: Vector3 = body.get_position_vector(time_val)
 
 	var response_time := time_val
@@ -262,23 +242,16 @@ func _get_body_position(params: Dictionary) -> Dictionary:
 	}
 
 
-func _get_body_orbit(params: Dictionary) -> Dictionary:
-	var body_name: Variant = params.get("name")
-	if typeof(body_name) != TYPE_STRING or body_name == "":
-		return {"_error": {"code": ERR_INVALID_PARAMS,
-				"message": "Missing or invalid 'name' parameter"}}
+func _get_body_orbit(params: Dictionary) -> Variant:
+	var body_or_err: Variant = IVAssistantTestSuite.parse_body(params.get("name"), "name")
+	if body_or_err is Dictionary:
+		return body_or_err
+	var body: IVBody = body_or_err
 
-	var name_str: String = body_name
-	var sn := StringName(name_str)
-	if !IVBody.bodies.has(sn):
-		return {"_error": {"code": ERR_BODY_NOT_FOUND,
-				"message": "Body not found: %s" % name_str}}
-
-	var body: IVBody = IVBody.bodies[sn]
 	var orbit: IVOrbit = body.get_orbit()
 	if !orbit:
 		return {"_error": {"code": ERR_INVALID_PARAMS,
-				"message": "Body '%s' has no orbit" % name_str}}
+				"message": "Body '%s' has no orbit" % String(body.name)}}
 
 	var time_var: Variant = params.get("time")
 	var has_time := time_var != null
@@ -310,28 +283,16 @@ func _get_body_orbit(params: Dictionary) -> Dictionary:
 		}
 
 
-func _get_body_distance(params: Dictionary) -> Dictionary:
-	var name_a: Variant = params.get("body_a")
-	if typeof(name_a) != TYPE_STRING or name_a == "":
-		return {"_error": {"code": ERR_INVALID_PARAMS,
-				"message": "Missing or invalid 'body_a' parameter"}}
+func _get_body_distance(params: Dictionary) -> Variant:
+	var body_a_or_err: Variant = IVAssistantTestSuite.parse_body(params.get("body_a"), "body_a")
+	if body_a_or_err is Dictionary:
+		return body_a_or_err
+	var body_a: IVBody = body_a_or_err
 
-	var name_b: Variant = params.get("body_b")
-	if typeof(name_b) != TYPE_STRING or name_b == "":
-		return {"_error": {"code": ERR_INVALID_PARAMS,
-				"message": "Missing or invalid 'body_b' parameter"}}
-
-	var str_a: String = name_a
-	var sn_a := StringName(str_a)
-	if !IVBody.bodies.has(sn_a):
-		return {"_error": {"code": ERR_BODY_NOT_FOUND,
-				"message": "Body not found: %s" % str_a}}
-
-	var str_b: String = name_b
-	var sn_b := StringName(str_b)
-	if !IVBody.bodies.has(sn_b):
-		return {"_error": {"code": ERR_BODY_NOT_FOUND,
-				"message": "Body not found: %s" % str_b}}
+	var body_b_or_err: Variant = IVAssistantTestSuite.parse_body(params.get("body_b"), "body_b")
+	if body_b_or_err is Dictionary:
+		return body_b_or_err
+	var body_b: IVBody = body_b_or_err
 
 	var time_val := NAN
 	var time_var: Variant = params.get("time")
@@ -342,8 +303,6 @@ func _get_body_distance(params: Dictionary) -> Dictionary:
 		var time_num: float = time_var
 		time_val = time_num
 
-	var body_a: IVBody = IVBody.bodies[sn_a]
-	var body_b: IVBody = IVBody.bodies[sn_b]
 	var pos_a := IVAssistantTestSuite.get_global_position(body_a, time_val)
 	var pos_b := IVAssistantTestSuite.get_global_position(body_b, time_val)
 	var distance: float = pos_a.distance_to(pos_b)
@@ -359,17 +318,11 @@ func _get_body_distance(params: Dictionary) -> Dictionary:
 	}
 
 
-func _get_body_state_vectors(params: Dictionary) -> Dictionary:
-	var body_name: Variant = params.get("name")
-	if typeof(body_name) != TYPE_STRING or body_name == "":
-		return {"_error": {"code": ERR_INVALID_PARAMS,
-				"message": "Missing or invalid 'name' parameter"}}
-
-	var name_str: String = body_name
-	var sn := StringName(name_str)
-	if !IVBody.bodies.has(sn):
-		return {"_error": {"code": ERR_BODY_NOT_FOUND,
-				"message": "Body not found: %s" % name_str}}
+func _get_body_state_vectors(params: Dictionary) -> Variant:
+	var body_or_err: Variant = IVAssistantTestSuite.parse_body(params.get("name"), "name")
+	if body_or_err is Dictionary:
+		return body_or_err
+	var body: IVBody = body_or_err
 
 	var time_val := NAN
 	var time_var: Variant = params.get("time")
@@ -380,7 +333,6 @@ func _get_body_state_vectors(params: Dictionary) -> Dictionary:
 		var time_num: float = time_var
 		time_val = time_num
 
-	var body: IVBody = IVBody.bodies[sn]
 	var vectors: Array[Vector3] = body.get_state_vectors(time_val)
 	var pos: Vector3 = vectors[0]
 	var vel: Vector3 = vectors[1]

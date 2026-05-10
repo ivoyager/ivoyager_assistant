@@ -19,13 +19,14 @@
 # *****************************************************************************
 extends IVAssistantTestSuite
 
-## Navigation, speed, pause, camera, GUI, and action emulation methods for
-## [IVAssistantServer].
+## Navigation, speed, pause, camera, GUI, action emulation, and body-HUD
+## visibility methods for [IVAssistantServer].
 
 var _selection_manager: IVSelectionManager
 var _speed_manager: IVSpeedManager
 var _timekeeper: IVTimekeeper
 var _camera_handler: IVCameraHandler
+var _body_huds_state: IVBodyHUDsState
 
 
 func _on_simulator_started() -> void:
@@ -35,6 +36,7 @@ func _on_simulator_started() -> void:
 	_speed_manager = IVGlobal.program.get(&"SpeedManager")
 	_timekeeper = IVGlobal.program.get(&"Timekeeper")
 	_camera_handler = IVGlobal.program.get(&"CameraHandler")
+	_body_huds_state = IVGlobal.program.get(&"BodyHUDsState")
 
 
 func _on_about_to_free() -> void:
@@ -42,6 +44,7 @@ func _on_about_to_free() -> void:
 	_speed_manager = null
 	_timekeeper = null
 	_camera_handler = null
+	_body_huds_state = null
 
 
 func get_method_names() -> Array[String]:
@@ -49,23 +52,20 @@ func get_method_names() -> Array[String]:
 		"select_body", "select_navigate", "set_pause", "set_speed",
 		"set_time", "move_camera", "show_hide_gui",
 		"list_actions", "press_action",
+		"set_all_body_orbits_visibility", "set_body_orbit_visible_flags",
 	]
 
 
-func get_capabilities() -> Array[String]:
-	var caps: Array[String] = [
-		"set_pause", "show_hide_gui", "list_actions", "press_action",
-	]
-	if IVGlobal.program.has(&"TopUI"):
-		caps.append("select_body")
-		caps.append("select_navigate")
-	if IVGlobal.program.has(&"CameraHandler"):
-		caps.append("move_camera")
-	if IVGlobal.program.has(&"SpeedManager"):
-		caps.append("set_speed")
-	if IVGlobal.program.has(&"Timekeeper") and IVCoreSettings.allow_time_setting:
-		caps.append("set_time")
-	return caps
+func get_method_requirements() -> Dictionary:
+	return {
+		"select_body": ["program.TopUI"],
+		"select_navigate": ["program.TopUI"],
+		"move_camera": ["program.CameraHandler"],
+		"set_speed": ["program.SpeedManager"],
+		"set_time": ["program.Timekeeper", "core.allow_time_setting"],
+		"set_all_body_orbits_visibility": ["program.BodyHUDsState"],
+		"set_body_orbit_visible_flags": ["program.BodyHUDsState"],
+	}
 
 
 func dispatch(method: String, params: Dictionary) -> Variant:
@@ -88,27 +88,21 @@ func dispatch(method: String, params: Dictionary) -> Variant:
 			return _list_actions()
 		"press_action":
 			return _press_action(params)
+		"set_all_body_orbits_visibility":
+			return _set_all_body_orbits_visibility(params)
+		"set_body_orbit_visible_flags":
+			return _set_body_orbit_visible_flags(params)
 	return {"_error": {"code": ERR_UNKNOWN_METHOD,
 			"message": "Unknown method: %s" % method}}
 
 
-func _select_body(params: Dictionary) -> Dictionary:
-	if !_selection_manager:
-		return {"_error": {"code": ERR_NOT_STARTED,
-				"message": "Selection manager not available"}}
+func _select_body(params: Dictionary) -> Variant:
+	var body_or_err: Variant = IVAssistantTestSuite.parse_body(params.get("name"), "name")
+	if body_or_err is Dictionary:
+		return body_or_err
+	var body: IVBody = body_or_err
 
-	var body_name: Variant = params.get("name")
-	if typeof(body_name) != TYPE_STRING or body_name == "":
-		return {"_error": {"code": ERR_INVALID_PARAMS,
-				"message": "Missing or invalid 'name' parameter"}}
-
-	var name_str: String = body_name
-	var sn := StringName(name_str)
-	if !IVBody.bodies.has(sn):
-		return {"_error": {"code": ERR_BODY_NOT_FOUND,
-				"message": "Body not found: %s" % body_name}}
-
-	_selection_manager.select_by_name(sn)
+	_selection_manager.select_by_name(body.name)
 	return {"ok": true}
 
 
@@ -128,10 +122,6 @@ func _set_pause(params: Dictionary) -> Dictionary:
 
 
 func _set_speed(params: Dictionary) -> Dictionary:
-	if !_speed_manager:
-		return {"_error": {"code": ERR_NOT_STARTED,
-				"message": "Speed manager not available"}}
-
 	if params.has("real_time"):
 		_speed_manager.change_speed(0)
 	elif params.has("index"):
@@ -166,10 +156,6 @@ func _set_speed(params: Dictionary) -> Dictionary:
 
 
 func _select_navigate(params: Dictionary) -> Dictionary:
-	if !_selection_manager:
-		return {"_error": {"code": ERR_NOT_STARTED,
-				"message": "Selection manager not available"}}
-
 	var dir_var: Variant = params.get("direction")
 	if typeof(dir_var) != TYPE_STRING or dir_var == "":
 		return {"_error": {"code": ERR_INVALID_PARAMS,
@@ -257,14 +243,6 @@ func _select_navigate(params: Dictionary) -> Dictionary:
 
 
 func _set_time(params: Dictionary) -> Dictionary:
-	if !_timekeeper:
-		return {"_error": {"code": ERR_NOT_STARTED,
-				"message": "Timekeeper not available"}}
-
-	if !IVCoreSettings.allow_time_setting:
-		return {"_error": {"code": ERR_NOT_ALLOWED,
-				"message": "Time setting is not allowed"}}
-
 	if params.has("time"):
 		var time_var: Variant = params["time"]
 		if typeof(time_var) != TYPE_FLOAT and typeof(time_var) != TYPE_INT:
@@ -318,10 +296,6 @@ func _set_time(params: Dictionary) -> Dictionary:
 
 
 func _move_camera(params: Dictionary) -> Dictionary:
-	if !_camera_handler:
-		return {"_error": {"code": ERR_NOT_STARTED,
-				"message": "Camera handler not available"}}
-
 	# Parse target (optional)
 	var target_var: Variant = params.get("target")
 	var has_target := target_var != null
@@ -390,6 +364,46 @@ func _list_actions() -> Dictionary:
 		var display_name := tr(label) if label else String(action)
 		actions[String(action)] = display_name
 	return {"actions": actions}
+
+
+# Body-HUD visibility (orbits/names/symbols) is persisted via
+# [member IVBodyHUDsState.PERSIST_PROPERTIES] and may be restored from a prior
+# user session by the project (e.g. planetarium's view cacher). Tests that
+# depend on a particular state must set it explicitly and restore on exit.
+# Both methods return the previous full [member IVBodyHUDsState.orbit_visible_flags]
+# so the caller can pass it to [code]set_body_orbit_visible_flags[/code] later
+# to restore exactly.
+func _set_all_body_orbits_visibility(params: Dictionary) -> Variant:
+	var visible_var: Variant = params.get("visible")
+	if typeof(visible_var) != TYPE_BOOL:
+		return {"_error": {"code": ERR_INVALID_PARAMS,
+				"message": "Missing or invalid 'visible' parameter (must be bool)"}}
+	var visible: bool = visible_var
+	var previous_flags: int = _body_huds_state.orbit_visible_flags
+	_body_huds_state.set_all_orbits_visibility(visible)
+	return {
+		"ok": true,
+		"previous_flags": previous_flags,
+		"orbit_visible_flags": _body_huds_state.orbit_visible_flags,
+		"all_flags": _body_huds_state.all_flags,
+	}
+
+
+func _set_body_orbit_visible_flags(params: Dictionary) -> Variant:
+	var flags_var: Variant = params.get("flags")
+	if typeof(flags_var) != TYPE_INT and typeof(flags_var) != TYPE_FLOAT:
+		return {"_error": {"code": ERR_INVALID_PARAMS,
+				"message": "Missing or invalid 'flags' parameter (must be int)"}}
+	var flags_num: float = flags_var
+	var flags := int(flags_num)
+	var previous_flags: int = _body_huds_state.orbit_visible_flags
+	_body_huds_state.set_orbit_visible_flags(flags)
+	return {
+		"ok": true,
+		"previous_flags": previous_flags,
+		"orbit_visible_flags": _body_huds_state.orbit_visible_flags,
+		"all_flags": _body_huds_state.all_flags,
+	}
 
 
 func _press_action(params: Dictionary) -> Dictionary:
