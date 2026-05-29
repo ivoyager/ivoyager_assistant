@@ -20,7 +20,105 @@ import json
 import socket
 import subprocess
 import sys
+import threading
 import time
+
+
+# =============================================================================
+# Godot launcher with output capture + leak detection
+# =============================================================================
+
+class GodotLauncher:
+    """Spawn Godot with captured stdout/stderr; detect leak warnings at quit.
+
+    For test scripts that drive Godot via the Assistant TCP server with a
+    --launch-style flag. Without output capture, Godot's quit-time diagnostics
+    (RID/ObjectDB/resource leak warnings) flow to a detached console on Windows
+    and are invisible to the test, so leaks slip past green test runs.
+
+    Usage:
+        launcher = GodotLauncher(godot_exe, project_dir)
+        launcher.start()
+        # ... run TCP test sequence, send quit ...
+        launcher.shutdown_and_report()
+        if launcher.leaks:
+            success = False
+    """
+
+    DEFAULT_LEAK_MARKERS = (
+        "leaked at exit",
+        "resources still in use at exit",
+        "were leaked.",
+    )
+
+    def __init__(self, godot, project, leak_markers=None, tail_lines=30):
+        self.godot = godot
+        self.project = project
+        self.leak_markers = tuple(
+            m.lower() for m in (leak_markers or self.DEFAULT_LEAK_MARKERS))
+        self.tail_lines = tail_lines
+        self._proc = None
+        self._captured = []
+        self._reader = None
+        self.leaks = []
+
+    def start(self):
+        self._proc = subprocess.Popen(
+            [self.godot, "--path", self.project],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        # Daemon reader thread keeps the kernel pipe drained so long runs
+        # (e.g. economy tests spanning game-years) never block on a full buffer.
+        self._reader = threading.Thread(target=self._drain, daemon=True)
+        self._reader.start()
+
+    def _drain(self):
+        try:
+            for line in iter(self._proc.stdout.readline, ""):
+                self._captured.append(line)
+        except (ValueError, OSError):
+            pass
+        finally:
+            try:
+                self._proc.stdout.close()
+            except Exception:
+                pass
+
+    def shutdown_and_report(self, wait_timeout=10):
+        """Wait for Godot to exit, print output tail, populate self.leaks."""
+        if not self._proc:
+            return
+        try:
+            self._proc.wait(timeout=wait_timeout)
+        except subprocess.TimeoutExpired:
+            print("\nGodot did not exit within %ds; killing." % wait_timeout)
+            self._proc.kill()
+            self._proc.wait(timeout=5)
+        if self._reader:
+            self._reader.join(timeout=2)
+
+        tail = self._captured[-self.tail_lines:]
+        if tail:
+            print("\n--- Godot output (last %d lines) ---" % len(tail))
+            for line in tail:
+                sys.stdout.write(line if line.endswith("\n") else line + "\n")
+            print("--- end Godot output ---")
+
+        self.leaks = []
+        for raw in self._captured:
+            line = raw.rstrip("\r\n")
+            if any(marker in line.lower() for marker in self.leak_markers):
+                self.leaks.append(line)
+
+        if self.leaks:
+            print("\n*** Object/resource leaks detected at quit ***")
+            for line in self.leaks:
+                print("  " + line)
+        else:
+            print("\nNo object/resource leaks detected at quit.")
 
 
 # =============================================================================
@@ -627,12 +725,13 @@ def main():
                         help="Skip mouse-hover identification test")
     args = parser.parse_args()
 
-    godot_proc = None
+    launcher = None
     if args.launch:
         godot = args.godot or "../Godot_v4.6.2-stable_win64_console.exe"
         project = args.project or "."
         print("Launching Godot: %s --path %s" % (godot, project))
-        godot_proc = subprocess.Popen([godot, "--path", project])
+        launcher = GodotLauncher(godot, project)
+        launcher.start()
 
     client = AssistantClient(host=args.host, port=args.port)
     try:
@@ -652,8 +751,10 @@ def main():
         success = False
     finally:
         client.close()
-        if godot_proc:
-            godot_proc.wait(timeout=10)
+        if launcher:
+            launcher.shutdown_and_report()
+            if launcher.leaks:
+                success = False
 
     sys.exit(0 if success else 1)
 
