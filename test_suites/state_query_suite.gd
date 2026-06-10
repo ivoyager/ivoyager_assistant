@@ -253,6 +253,17 @@ func _get_body_orbit(params: Dictionary) -> Variant:
 		return {"_error": {"code": ERR_INVALID_PARAMS,
 				"message": "Body '%s' has no orbit" % String(body.name)}}
 
+	# Orbit model class (e.g. "IVOrbit", "IVRealPlanetOrbit"). Lets clients tell
+	# whether time-dependent elements actually evolve (real planet orbits add
+	# secular a/e/i rates and mean-anomaly corrections) vs. a fixed Keplerian
+	# orbit with precession only. Falls back to "IVOrbit" if no script name.
+	var orbit_class := "IVOrbit"
+	var orbit_script: Script = orbit.get_script()
+	if orbit_script:
+		var global_name := orbit_script.get_global_name()
+		if global_name:
+			orbit_class = String(global_name)
+
 	var time_var: Variant = params.get("time")
 	var has_time := time_var != null
 	if has_time and typeof(time_var) != TYPE_FLOAT and typeof(time_var) != TYPE_INT:
@@ -268,6 +279,7 @@ func _get_body_orbit(params: Dictionary) -> Variant:
 			"longitude_ascending_node": orbit.get_longitude_ascending_node_at_time(time_num),
 			"argument_periapsis": orbit.get_argument_periapsis_at_time(time_num),
 			"period": orbit.get_period_at_time(time_num),
+			"orbit_class": orbit_class,
 			"time": time_num,
 		}
 	else:
@@ -279,6 +291,7 @@ func _get_body_orbit(params: Dictionary) -> Variant:
 			"longitude_ascending_node": orbit.get_longitude_ascending_node(),
 			"argument_periapsis": orbit.get_argument_periapsis(),
 			"period": orbit.get_period(),
+			"orbit_class": orbit_class,
 			"time": current,
 		}
 

@@ -285,9 +285,12 @@ Returns orbital elements.
   "longitude_ascending_node": -0.196,
   "argument_periapsis": 1.796,
   "period": 3.156e7,
+  "orbit_class": "IVOrbit",
   "time": 7.889e8
 }
 ```
+
+`orbit_class` is the orbit model's script class name — `"IVOrbit"` for a fixed Keplerian orbit with precession only, `"IVRealPlanetOrbit"` for the linear-element JPL model with secular a/e/i rates and mean-anomaly corrections (enabled per-project via `IVTableOrbitBuilder.use_real_planet_orbits`). Clients can use it to decide whether long-baseline element evolution applies. Falls back to `"IVOrbit"` if the orbit has no script global name.
 
 #### `get_body_distance`
 Returns distance between two bodies.
