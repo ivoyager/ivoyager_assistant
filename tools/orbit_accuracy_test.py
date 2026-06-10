@@ -77,8 +77,37 @@ HORIZONS_REFERENCE = {
     "PLANET_EARTH": {
         2455197.5008: (-26334934.63766209, 144727923.5274948, -3218.775398470461),
         2461041.5008: (-26072444.65802734, 144778303.5216888, -8507.011610202491),
+        # Far dates (years 2500, 2900) exercise the planet mean-anomaly rate over
+        # centuries, where dM/dt vs dL/dt confusion would compound (see issue #7
+        # follow-up). PLANET_EARTH is the Earth-Moon barycenter (Horizons "3").
+        2634166.5000: (-9041217.862812703, 146898746.2799278, -164530.5818493664),
+        2780263.5000: (5541806.054948838, 147166751.8044562, -298946.693286702),
+    },
+    "PLANET_MERCURY": {
+        2461041.5008: (-32191355.24063677, -61217992.66352803, -2050305.853280626),
+        2634166.5000: (-27488801.68864006, -63734843.21278827, -2760201.628164567),
+        2780263.5000: (-58136920.16018341, -3577463.459980177, 4904048.76532228),
+    },
+    "PLANET_VENUS": {
+        2461041.5008: (13298233.50592687, -107973828.247725, -2250692.566886865),
+        2634166.5000: (9588695.625431497, 107289264.7474756, 1064453.492698818),
+        2780263.5000: (-94936518.42365083, 50186383.1021242, 6210789.550433051),
+    },
+    "PLANET_MARS": {
+        2461041.5008: (50951684.2477811, -207492004.8715962, -5597567.504223526),
+        2634166.5000: (62642252.40850581, -203876084.9227972, -5772549.557795018),
+        2780263.5000: (-246472740.1627341, 33458657.68373083, 6279954.345535329),
     },
 }
+
+# Far-date planet checks (years 2500, 2900) only hold for the linear-element
+# JPL model (IVRealPlanetOrbit), which a project enables via
+# IVTableOrbitBuilder.use_real_planet_orbits. Projects that don't need that
+# precision (e.g. games) build planets as plain IVOrbit instances — accurate
+# near J2000 but drifting over centuries. The runner skips these checks (rather
+# than failing them) when a planet's reported orbit_class isn't IVRealPlanetOrbit.
+FAR_PLANET_JDS = frozenset({2634166.5000, 2780263.5000})
+REAL_PLANET_ORBIT_CLASS = "IVRealPlanetOrbit"
 
 # Angular separation tolerance (degrees). Mean-element models drift from the
 # real (perturbed) bodies; values below allow known model divergence plus
@@ -88,7 +117,14 @@ HORIZONS_REFERENCE = {
 ANGLE_TOLERANCE_DEG = {
     "MOON_MOON": 5.0,
     "MOON_PHOBOS": 8.0,
+    # Planets use the linear-element JPL model (IVRealPlanetOrbit), good to well
+    # under 1 deg across the 3000 BC - 3000 AD validity range once the mean
+    # anomaly advances at dM/dt (not dL/dt). 1 deg catches the rate bug at the
+    # far test dates while passing comfortably when correct.
+    "PLANET_MERCURY": 1.0,
+    "PLANET_VENUS": 1.0,
     "PLANET_EARTH": 1.0,
+    "PLANET_MARS": 1.0,
 }
 DEFAULT_ANGLE_TOLERANCE_DEG = 3.0
 
@@ -152,8 +188,32 @@ def ecliptic_lon_lat_deg(v):
     return lon, lat
 
 
+def get_present_bodies(client):
+    """Return the set of body names the project actually loaded, or None if the
+    list_bodies capability is unavailable (then presence isn't gated)."""
+    response = client.call("list_bodies", {"filter": "all"})
+    if "error" in response:
+        return None
+    return set(response.get("result", {}).get("bodies", []))
+
+
+def get_orbit_class(client, body_name, cache):
+    """Report a body's orbit model class (e.g. 'IVRealPlanetOrbit'), cached.
+    Falls back to 'IVOrbit' if the field is absent (older plugin) so far-date
+    planet checks degrade to skipped rather than asserted."""
+    if body_name in cache:
+        return cache[body_name]
+    response = client.call("get_body_orbit", {"name": body_name})
+    orbit_class = response.get("result", {}).get("orbit_class", "IVOrbit")
+    cache[body_name] = orbit_class
+    return orbit_class
+
+
 def run_tests(client, body_filter=None):
     failures = []
+    skips = []
+    present_bodies = get_present_bodies(client)
+    orbit_class_cache = {}
     print(f"\n{'body':14s} {'jd_tdb':>12s} {'angle':>8s} {'dlon':>8s} "
           f"{'r_ratio':>8s} {'tol':>5s}  result")
     print("-" * 70)
@@ -161,8 +221,25 @@ def run_tests(client, body_filter=None):
     for body_name, references in HORIZONS_REFERENCE.items():
         if body_filter and body_name not in body_filter:
             continue
+        # Skip bodies this project doesn't load (different/smaller body set) so
+        # the runner stays useful across projects rather than reporting failures.
+        if present_bodies is not None and body_name not in present_bodies:
+            skips.append(f"{body_name}: not loaded in this project")
+            print(f"{body_name:14s} {'(all dates)':>12s}  SKIP: body not loaded")
+            continue
         tolerance = ANGLE_TOLERANCE_DEG.get(body_name, DEFAULT_ANGLE_TOLERANCE_DEG)
         for jd_tdb, ref_vector in references.items():
+            # Far-date planet checks require the IVRealPlanetOrbit model. Skip
+            # (don't fail) when the project builds plain Keplerian planet orbits.
+            if jd_tdb in FAR_PLANET_JDS and body_name.startswith("PLANET_"):
+                orbit_class = get_orbit_class(client, body_name, orbit_class_cache)
+                if orbit_class != REAL_PLANET_ORBIT_CLASS:
+                    skips.append(f"{body_name} @ {jd_tdb}: far-date check needs "
+                                 f"{REAL_PLANET_ORBIT_CLASS}, project uses {orbit_class}")
+                    print(f"{body_name:14s} {jd_tdb:12.4f}  SKIP: "
+                          f"needs {REAL_PLANET_ORBIT_CLASS} (got {orbit_class})")
+                    continue
+
             time_seconds = (jd_tdb - EPOCH_JD) * DAY_SECONDS
             response = client.call("get_body_position",
                                    {"name": body_name, "time": time_seconds})
@@ -188,7 +265,7 @@ def run_tests(client, body_filter=None):
             print(f"{body_name:14s} {jd_tdb:12.4f} {angle:7.2f}° {delta_lon:+7.2f}° "
                   f"{radius_ratio:8.3f} {tolerance:4.1f}°  {'PASS' if ok else 'FAIL'}")
 
-    return failures
+    return failures, skips
 
 
 def main():
@@ -220,23 +297,28 @@ def main():
         print(f"Connecting to {args.host}:{args.port}...")
         client.connect()
 
-        # get_body_position is sim-gated; wait for readiness via retry on error 4
+        # Sim-gated methods return error 4 until the readiness gate opens. Probe
+        # list_bodies (no specific body required) until it returns a result.
         import time as time_module
         for _ in range(60):
-            response = client.call("get_body_position",
-                                   {"name": "PLANET_EARTH", "time": 0.0})
+            response = client.call("list_bodies", {"filter": "all"})
             if "result" in response:
                 break
             time_module.sleep(1.0)
 
-        failures = run_tests(client, args.bodies)
+        failures, skips = run_tests(client, args.bodies)
         success = not failures
+        if skips:
+            print(f"\n{len(skips)} skipped:")
+            for skip in skips:
+                print(f"  - {skip}")
         if failures:
             print(f"\n{len(failures)} FAILURE(S):")
             for failure in failures:
                 print(f"  - {failure}")
         else:
-            print("\nAll orbit accuracy checks passed.")
+            checked = "all applicable" if skips else "all"
+            print(f"\nOrbit accuracy: {checked} checks passed.")
     except Exception as exc:
         print(f"\nERROR: {exc}")
     finally:
