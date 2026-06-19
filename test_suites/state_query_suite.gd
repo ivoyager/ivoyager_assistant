@@ -280,6 +280,7 @@ func _get_body_orbit(params: Dictionary) -> Variant:
 			"argument_periapsis": orbit.get_argument_periapsis_at_time(time_num),
 			"period": orbit.get_period_at_time(time_num),
 			"orbit_class": orbit_class,
+			"parent_name": String(orbit.parent_name),
 			"time": time_num,
 		}
 	else:
@@ -292,6 +293,7 @@ func _get_body_orbit(params: Dictionary) -> Variant:
 			"argument_periapsis": orbit.get_argument_periapsis(),
 			"period": orbit.get_period(),
 			"orbit_class": orbit_class,
+			"parent_name": String(orbit.parent_name),
 			"time": current,
 		}
 
