@@ -373,12 +373,12 @@ Set simulation time. Requires `IVCoreSettings.allow_time_setting == true`.
 **Result:** `{"ok": true, "time": 7.889e8}`
 
 #### `move_camera`
-Move the camera to a target.
+Low-level camera move. **Prefer the view methods (§4.10) for the common "frame a body" case** — they bind to the same Core entry point the GUI view buttons use and need no hand-built perspective-distance vector. Use `move_camera` only for explicit per-axis control.
 
 **Params:**
-- `target` (string, optional) — Body name to move to
-- `view_position` (array, optional) — `[r, lat, lon]` spherical coordinates
-- `view_rotations` (array, optional) — `[pitch, yaw, roll]`
+- `target` (string, optional) — Body name to move to. Omit to keep the current target.
+- `view_position` (array, optional) — `[longitude, latitude, perspective_distance]`. The third element is a *perspective distance*, not meters: scaled by the target's radius when near, blending to an absolute distance when far. This is an `IVCamera` internal — see the `IVCamera` / `IVCameraHandler` class docs (this spec does not restate the formula). Omit to keep the current framing.
+- `view_rotations` (array, optional) — `[pitch, yaw, roll]` Euler offsets.
 - `instant` (bool, optional) — Skip animation. Default: false.
 
 **Result:** `{"ok": true}`
@@ -658,6 +658,49 @@ Return the current state of `IVMouseTargetLabel` — the user-visible identifica
 4. `warp_mouse` to that pixel (or a small offset for orbit-line tests).
 5. Sleep / poll briefly; call `get_hover_target` and assert on `text`.
 
+### 4.10 Views
+
+Named built-in views are the GUI-parity way to frame the camera and (optionally) reset HUD/time state. Each maps to a row in `tables/views.tsv` and is the exact target of a default `IVViewButton` (`pressed → IVViewManager.set_table_view`). See §10 (Core surface classes). These are the standard "frame a body" controls — prefer them over `move_camera`.
+
+#### `list_views`
+Enumerate built-in (table-defined) views with decoded fields. Scope is table views only; user/cached/gamesave views are not exposed (see §10 and CODING_PLAN.md "Suite B").
+
+**Params:** none.
+
+**Result:**
+```json
+{
+  "views": {
+    "VIEW_ZOOM": {
+      "scope": "table",
+      "target_name": "",
+      "tracking": "none",
+      "up_lock": "locked",
+      "view_position": [null, 0.314, 0.003],
+      "affects": ["camera_longitude", "camera_orientation"]
+    }
+  }
+}
+```
+
+Field meanings:
+- `target_name` — camera target body, or `""` to keep the current selection.
+- `tracking` — one of `ground`, `orbit`, `ecliptic`, `galactic`, `supergalactic`, `none`.
+- `up_lock` — one of `locked`, `unlocked`, `unset`.
+- `view_position` — `[longitude, latitude, perspective_distance]`; each element is `null` where the view keeps the current value (e.g. `VIEW_ZOOM` leaves longitude unset). The third element is a perspective distance, not meters (see the `IVCamera` class docs).
+- `affects` — the state categories the view overwrites when applied: any of `camera_selection`, `camera_longitude`, `camera_orientation`, `huds_visibility`, `huds_color`, `time_state`, `sync_os_time`. Lets a client see a view's blast radius (e.g. `VIEW_ZOOM` only moves the camera; `VIEW_HOME` also resets HUDs).
+
+#### `apply_view`
+Apply a built-in view by name — the standard way to frame the camera. Equivalent to clicking the matching GUI view button.
+
+**Params:**
+- `name` (string, required) — A view name from `list_views` (e.g. `"VIEW_ZOOM"`, `"VIEW_HOME"`).
+- `instant` (bool, optional, default false) — Skip the camera animation. Pass `true` before a `screenshot`.
+
+**Result:** `{"ok": true, "name": "VIEW_ZOOM"}`
+
+Unknown `name` returns error code 2 (call `list_views` for valid names).
+
 ## 5. Core API Dependencies
 
 The AssistantServer reads from and writes to these core objects:
@@ -722,7 +765,8 @@ The `[assistant_test_suites]` section registers `IVAssistantTestSuite` subclasse
 | Suite | Methods |
 |---|---|
 | `StateQuerySuite` | `get_time`, `get_selection`, `get_camera`, `list_bodies`, `get_body_info`, `get_body_position`, `get_body_orbit`, `get_body_distance`, `get_body_state_vectors` |
-| `ControlSuite` | `select_body`, `select_navigate`, `set_pause`, `set_speed`, `set_time`, `move_camera`, `show_hide_gui`, `list_actions`, `press_action` |
+| `ControlSuite` | `select_body`, `select_navigate`, `set_pause`, `set_speed`, `set_time`, `move_camera`, `show_hide_gui`, `list_actions`, `press_action`, `set_all_body_orbits_visibility`, `set_body_orbit_visible_flags` |
+| `ViewSuite` | `list_views`, `apply_view` |
 | `CoreTestSuite` | `screenshot`, `save_game`, `load_game`, `get_save_status` |
 | `GuiInspectionSuite` | `find_nodes`, `inspect_node`, `read_node_text` |
 | `MouseTargetIdSuite` | `warp_mouse`, `project_to_screen`, `get_hover_target` |
@@ -802,6 +846,8 @@ The vocabulary:
 | `program.SpeedManager` | `IVGlobal.program.has(&"SpeedManager")` |
 | `program.Timekeeper` | `IVGlobal.program.has(&"Timekeeper")` |
 | `program.CameraHandler` | `IVGlobal.program.has(&"CameraHandler")` |
+| `program.ViewManager` | `IVGlobal.program.has(&"ViewManager")` |
+| `program.BodyHUDsState` | `IVGlobal.program.has(&"BodyHUDsState")` |
 | `autoload.IVSave` | autoload at `/root/IVSave` is present |
 | `body_table.stars` | `&"stars" in IVCoreSettings.body_tables` |
 | `body_table.planets` | `&"planets" in IVCoreSettings.body_tables` |
@@ -904,3 +950,23 @@ The script is capability-aware: it checks the `capabilities` array from `get_pro
 - **Error code 4 (simulator not ready):** If received, poll `get_state` and retry. This occurs before `start_game` completes, during load operations, and during the readiness-gate delay after `simulator_started` (default 10 frames; longer if the project supplies a `ready_predicate`). Note that `started == true` is necessary but not sufficient — sim-gated methods may briefly continue to return error 4 after `started` flips true while the readiness gate is still closing its delay window. Simply retry on error 4.
 - **Per-frame processing:** Commands are processed once per frame (~60 Hz). Between a request and its response, at least one game frame passes.
 - **Capabilities are authoritative:** Only call methods listed in the `capabilities` array from `get_project_info`. Missing capabilities indicate the project lacks the required program objects or plugins.
+
+## 10. Core surface classes (layering principle)
+
+Assistant methods bind to the **same Core entry points the GUI widgets bind to, at the same abstraction level.** When a control already exists in the GUI, the Assistant method that exposes it should call the same Core method the widget's signal handler calls — not a lower-level primitive. This keeps an automated action and a user's button click semantically identical and on the same code path, which serves both goals in §1: faithful testing, and accessibility as genuine GUI substitution.
+
+Reaching below that surface is a deliberate, marked exception — today only `move_camera`, which bypasses the view layer and hand-supplies a perspective-distance `view_position` (documented as low-level in §4.3). Camera framing should normally go through the view methods (§4.10), which call `IVViewManager.set_table_view` — exactly what the GUI view buttons do.
+
+| Control group | GUI widget script | Core class.method |
+|---|---|---|
+| Apply named view | `ui_widgets/view_button.gd` (`IVViewButton`) | `IVViewManager.set_table_view` (default views); `IVViewManager.set_view` (user/cached) |
+| Select / navigate body | `ui_widgets/nav_button.gd`, `selection_buttons.gd` | `IVSelectionManager.select_by_name` / navigation methods |
+| Body / SBG HUD visibility | `ui_widgets/huds_checkbox.gd` | `IVBodyHUDsState` / `IVSBGHUDsState` `set_*_visible_flags` |
+| Simulation speed | `ui_widgets/speed_buttons.gd` | `IVSpeedManager.change_speed` |
+| Pause | `ui_widgets/pause_button.gd` | `IVStateManager.set_user_paused` |
+| Time | `ui_widgets/time_setter.gd` | `IVTimekeeper.set_time` / related |
+| Camera (low-level) | — (no GUI widget hand-supplies a `view_position`) | `IVCameraHandler.move_to` / `move_to_by_name` — perspective-distance system; **below the view layer, the marked exception** |
+
+New write-side Assistant methods should add a row here and bind at the widget level.
+
+> **Planned (not yet implemented):** a generic widget-actuation suite — the write-side sibling of `GuiInspectionSuite` (§4.8) — is planned to let clients press/set bounded GUI controls by node path. See CODING_PLAN.md ("Suite B"). It is intentionally absent from the method catalog above until implemented.
