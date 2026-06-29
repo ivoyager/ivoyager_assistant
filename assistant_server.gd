@@ -99,6 +99,12 @@ var _gated_methods: Dictionary[String, PackedStringArray] = {} # currently-unmet
 
 func _ready() -> void:
 	process_mode = PROCESS_MODE_ALWAYS
+	if OS.has_feature("web"):
+		# TCPServer isn't available on web, so the server can't listen here. Web
+		# accessibility support will need a different transport (e.g. WebSocket)
+		# when added; until then stay inert rather than erroring on a doomed listen().
+		set_process(false)
+		return
 	var config := IVAssistantPluginUtils.get_ivoyager_config(
 			"res://addons/ivoyager_assistant/ivoyager_assistant.cfg")
 	var enabled: bool = config.get_value("assistant", "enabled", true)
