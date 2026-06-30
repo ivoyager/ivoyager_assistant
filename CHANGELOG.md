@@ -4,9 +4,9 @@ This file documents changes to [ivoyager_assistant](https://github.com/ivoyager/
 
 File format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [v0.0.1] - UNRELEASED
+## v0.0.1 - 2025-06-29
 
-Under development using Godot 4.6.1.
+Released using Godot 4.7.
 
 ### Added
 * TCP server (IVAssistantServer autoload) providing a JSON-RPC-style interface on port 29071 for AI testing and accessibility.
