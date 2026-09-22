@@ -589,11 +589,13 @@ Three primitives for verifying the user-visible effect of any system that identi
 
 This suite intentionally observes [`IVMouseTargetLabel.text`](../ivoyager_core/ui/mouse_target_label.gd) — the label the user actually sees — rather than any specific identifier API. Tests written against these methods remain valid across replacement of the underlying identification mechanism (e.g. a future Compositors-based system replacing `IVFragmentIdentifier`).
 
+Every position these methods take or return is in **window pixels**: the pixels of a `screenshot` image. On a hi-DPI screen the Core plugin's display scale makes them finer than the GUI's logical pixels (2.5 to one at 250% Windows scaling), and the methods convert between the two so a client never has to.
+
 #### `warp_mouse`
-Synthesize an `InputEventMouseMotion` at a viewport pixel position. Updates `IVWorldController.mouse_position` (and any other input subscribers) the same way an OS-generated mouse event would, without moving the visible OS cursor.
+Synthesize an `InputEventMouseMotion` at a window pixel position. Updates `IVWorldController.mouse_position` (and any other input subscribers) the same way an OS-generated mouse event would, without moving the visible OS cursor.
 
 **Params:**
-- `position` (array, required) — `[x, y]` in viewport pixel coordinates
+- `position` (array, required) — `[x, y]` in window pixel coordinates
 
 **Result:**
 ```json
@@ -601,7 +603,7 @@ Synthesize an `InputEventMouseMotion` at a viewport pixel position. Updates `IVW
 ```
 
 #### `project_to_screen`
-Project a 3D world position to a viewport pixel via the active `Camera3D.unproject_position()`. Use to find good test coordinates for hover assertions: project a body for body-pixel hover, project a body at a future time to land on its orbit line, project an asteroid for SBG-point hover.
+Project a 3D world position to a window pixel via the active `Camera3D.unproject_position()`. Use to find good test coordinates for hover assertions: project a body for body-pixel hover, project a body at a future time to land on its orbit line, project an asteroid for SBG-point hover.
 
 **Params (exactly one of `body`, `world_position`, or `small_body` required):**
 - `body` (string) — Body name; projects the body's current Node3D `global_position` (already in Godot scene-tree world coordinates).

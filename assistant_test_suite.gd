@@ -157,3 +157,11 @@ static func get_global_position(body: IVBody, time: float) -> Vector3:
 			pos += current.get_position_vector(time)
 		current = current.parent
 	return pos
+
+
+## Converts a [param position] in [param viewport]'s 2D coordinates (a mouse position,
+## or a [method Camera3D.unproject_position] result) to window pixels, the pixels of a
+## screenshot and of a synthesized mouse event. The Core plugin's display scale makes
+## the two differ; report window pixels to clients.
+static func to_window_pixels(viewport: Viewport, position: Vector2) -> Vector2:
+	return viewport.get_final_transform() * position

@@ -91,9 +91,10 @@ func _project_small_body_to_screen(params: Dictionary) -> Variant:
 	var on_screen := !behind and (
 			screen.x >= 0.0 and screen.y >= 0.0
 			and screen.x <= rect_size.x and screen.y <= rect_size.y)
+	var pixel := IVAssistantTestSuite.to_window_pixels(viewport, screen)
 	return {
 		"name": sb_name,
-		"position": [screen.x, screen.y],
+		"position": [pixel.x, pixel.y],
 		"on_screen": on_screen,
 		"behind_camera": behind,
 		"world_position_used": [world_pos.x, world_pos.y, world_pos.z],
