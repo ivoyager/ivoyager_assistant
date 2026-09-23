@@ -12,7 +12,9 @@ Usage:
     python assistant_test.py --skip-save      # skip save/load cycle
     python assistant_test.py --skip-hover     # skip mouse-hover identification test
     python assistant_test.py --host HOST      # custom host (default: 127.0.0.1)
-    python assistant_test.py --port PORT      # custom port (default: 29071)
+    python assistant_test.py --port PORT      # custom port (default: 29071,
+                                              # or a free port with --launch)
+    python assistant_test.py --launch --headless  # no rendering
 """
 
 import argparse
@@ -22,6 +24,94 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
+
+
+DEFAULT_PORT = 29071
+
+
+def _kill_on_exit(proc):
+    """Ties `proc` to this Python process, so it dies with it (Windows only).
+
+    A test script that is killed outright (a timeout, a task runner stopping
+    it) never reaches its cleanup, and the Godot it launched would run on
+    holding its port. A job object that kills its members when its last
+    handle closes lets the OS clean up instead. Godot's console wrapper
+    holds the real game process in a job of its own, so killing the wrapper
+    is enough.
+    """
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class IoCounters(ctypes.Structure):
+        _fields_ = [(name, ctypes.c_ulonglong) for name in (
+            "read_ops", "write_ops", "other_ops",
+            "read_bytes", "write_bytes", "other_bytes")]
+
+    class BasicLimits(ctypes.Structure):
+        _fields_ = [
+            ("per_process_user_time_limit", ctypes.c_int64),
+            ("per_job_user_time_limit", ctypes.c_int64),
+            ("limit_flags", wintypes.DWORD),
+            ("minimum_working_set_size", ctypes.c_size_t),
+            ("maximum_working_set_size", ctypes.c_size_t),
+            ("active_process_limit", wintypes.DWORD),
+            ("affinity", ctypes.c_size_t),
+            ("priority_class", wintypes.DWORD),
+            ("scheduling_class", wintypes.DWORD),
+        ]
+
+    class ExtendedLimits(ctypes.Structure):
+        _fields_ = [
+            ("basic", BasicLimits),
+            ("io", IoCounters),
+            ("process_memory_limit", ctypes.c_size_t),
+            ("job_memory_limit", ctypes.c_size_t),
+            ("peak_process_memory_used", ctypes.c_size_t),
+            ("peak_job_memory_used", ctypes.c_size_t),
+        ]
+
+    JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    job = kernel32.CreateJobObjectW(None, None)
+    if not job:
+        return None
+    limits = ExtendedLimits()
+    limits.basic.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    ok = kernel32.SetInformationJobObject(
+        wintypes.HANDLE(job), JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+        ctypes.byref(limits), ctypes.sizeof(limits))
+    ok = ok and kernel32.AssignProcessToJobObject(
+        wintypes.HANDLE(job), wintypes.HANDLE(int(proc._handle)))
+    if not ok:
+        print("GodotLauncher: could not tie Godot to this process (error %d);"
+              " it will outlive a killed script" % ctypes.get_last_error())
+    return job  # the handle must stay open for as long as Godot should live
+
+
+_ports_handed_out = set()
+_ports_lock = threading.Lock()
+
+
+def pick_free_port():
+    """A localhost port nothing is listening on now, for a launched instance.
+
+    Never the same port twice in one Python process, so launchers started
+    together from several threads cannot be handed one port before any of
+    their games has bound it.
+    """
+    with _ports_lock:
+        while True:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.bind(("127.0.0.1", 0))
+                port = probe.getsockname()[1]
+            if port not in _ports_handed_out:
+                _ports_handed_out.add(port)
+                return port
 
 
 # =============================================================================
@@ -36,9 +126,21 @@ class GodotLauncher:
     (RID/ObjectDB/resource leak warnings) flow to a detached console on Windows
     and are invisible to the test, so leaks slip past green test runs.
 
+    Several launchers can run at once when each is given port=0, which
+    picks a free port (read it back from launcher.port); the default is the
+    config's 29071. Every launch also passes an instance id, and
+    check_instance() proves a connected client reached that instance and
+    not another one holding the port.
+
+    A launched Godot does not outlive the Python process that launched it,
+    even when that process is killed outright (Windows).
+
     Usage:
-        launcher = GodotLauncher(godot_exe, project_dir)
+        launcher = GodotLauncher(godot_exe, project_dir, port=0)
         launcher.start()
+        client = AssistantClient(port=launcher.port)
+        client.connect()
+        launcher.check_instance(client)
         # ... run TCP test sequence, send quit ...
         launcher.shutdown_and_report()
         if launcher.leaks:
@@ -51,29 +153,45 @@ class GodotLauncher:
         "were leaked.",
     )
 
-    def __init__(self, godot, project, leak_markers=None, tail_lines=30):
+    def __init__(self, godot, project, leak_markers=None, tail_lines=30,
+                 extra_args=(), port=DEFAULT_PORT):
         self.godot = godot
         self.project = project
+        self.extra_args = list(extra_args)
+        self.port = port or pick_free_port()
+        self.instance_id = uuid.uuid4().hex
         self.leak_markers = tuple(
             m.lower() for m in (leak_markers or self.DEFAULT_LEAK_MARKERS))
         self.tail_lines = tail_lines
         self._proc = None
+        self._job = None
         self._captured = []
         self._reader = None
         self.leaks = []
 
     def start(self):
         self._proc = subprocess.Popen(
-            [self.godot, "--path", self.project],
+            [self.godot] + self.extra_args + ["--path", self.project, "--",
+             "--assistant-port=%d" % self.port,
+             "--assistant-instance=%s" % self.instance_id],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
         )
+        self._job = _kill_on_exit(self._proc)
         # Daemon reader thread keeps the kernel pipe drained so long runs
         # (e.g. economy tests spanning game-years) never block on a full buffer.
         self._reader = threading.Thread(target=self._drain, daemon=True)
         self._reader.start()
+
+    def check_instance(self, client):
+        """Raises unless `client` is connected to the instance this launched."""
+        info = client.call("get_project_info").get("result", {})
+        if info.get("instance_id") != self.instance_id:
+            raise RuntimeError(
+                "port %d is served by another Godot (process %s), not the one launched;"
+                " is an orphaned instance holding it?" % (self.port, info.get("process_id")))
 
     def _drain(self):
         try:
@@ -712,9 +830,14 @@ def main():
     parser = argparse.ArgumentParser(
         description="Generic I, Voyager test runner (SPECIFICATION.md section 9)")
     parser.add_argument("--host", default="127.0.0.1", help="Server host")
-    parser.add_argument("--port", type=int, default=29071, help="Server port")
+    parser.add_argument("--port", type=int, default=None,
+                        help="Server port (default: %d, or a free port with --launch)"
+                             % DEFAULT_PORT)
     parser.add_argument("--launch", action="store_true",
                         help="Launch Godot before testing")
+    parser.add_argument("--headless", action="store_true",
+                        help="With --launch: pass --headless to Godot (no rendering;"
+                             " skips the mouse-hover test)")
     parser.add_argument("--godot", default=None,
                         help="Path to Godot executable")
     parser.add_argument("--project", default=None,
@@ -729,17 +852,23 @@ def main():
     if args.launch:
         godot = args.godot or "../Godot_v4.6.2-stable_win64_console.exe"
         project = args.project or "."
-        print("Launching Godot: %s --path %s" % (godot, project))
-        launcher = GodotLauncher(godot, project)
+        extra = ["--headless"] if args.headless else []
+        launcher = GodotLauncher(godot, project, extra_args=extra, port=args.port or 0)
+        print("Launching Godot: %s %s --path %s (port %d)"
+              % (godot, " ".join(extra), project, launcher.port))
         launcher.start()
+    port = launcher.port if launcher else args.port or DEFAULT_PORT
 
-    client = AssistantClient(host=args.host, port=args.port)
+    client = AssistantClient(host=args.host, port=port)
     try:
-        print("Connecting to %s:%d..." % (args.host, args.port))
+        print("Connecting to %s:%d..." % (args.host, port))
         client.connect()
+        if launcher:
+            launcher.check_instance(client)
         print("Connected!\n")
 
-        runner = TestRunner(client, skip_save=args.skip_save, skip_hover=args.skip_hover)
+        runner = TestRunner(client, skip_save=args.skip_save,
+                            skip_hover=args.skip_hover or args.headless)
         success = runner.run_all()
 
         # 9.3 Step 6: Quit

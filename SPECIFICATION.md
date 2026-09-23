@@ -64,7 +64,7 @@ For projects with `wait_for_start = true` (splash screens), there is a gap betwe
 ### 3.1 Transport
 
 - **TCP** on `localhost`, default port `29071`
-- Port configurable via `ivoyager_assistant.cfg` under `[assistant]` section
+- Port configurable via `ivoyager_assistant.cfg` under `[assistant]` section, or per process on the command line (§7.3), so several instances can run on one machine
 
 ### 3.2 Message Format
 
@@ -125,6 +125,8 @@ Returns project identity, configuration, available capabilities, and optional co
 - `assistant_name` defaults to `project_name` unless overridden in config.
 - `capabilities` lists all methods available based on registered program objects and settings.
 - `context` (string, optional) included if a context file is configured.
+- `process_id` (int) is the game's OS process id, and `port` the port it listens on.
+- `instance_id` (string, optional) echoes the `--assistant-instance` command-line argument (§7.3). A launcher that passes one can confirm it reached the process it started rather than another instance holding the port.
 
 #### `start_game`
 Start the simulation in projects with splash screens (`wait_for_start = true`). Returns error if already started or not ready (assets still loading).
@@ -826,6 +828,17 @@ The `[assistant]` section controls runtime behavior:
 
 Base values in `ivoyager_assistant.cfg` can be overridden per-project via `ivoyager_override.cfg` or `ivoyager_override2.cfg`.
 
+Two command-line user arguments (after Godot's `--` separator) override these per process, for running several instances of one project at once:
+
+- `--assistant-port=<port>` — listen on this port instead of the configured one.
+- `--assistant-instance=<id>` — an arbitrary token echoed as `instance_id` in `get_project_info`.
+
+```
+Godot_v4.7.2-stable_win64_console.exe --headless --path <project> -- --assistant-port=29072 --assistant-instance=run-a
+```
+
+`GodotLauncher` in `tools/assistant_test.py` passes both: its `port` defaults to 29071, and `port=0` picks a free one (read back as `launcher.port`). After connecting, `check_instance()` verifies the echo. Its launched Godot also dies with the Python process that started it, even one killed outright (Windows), so an aborted script leaves no instance holding a port.
+
 ### 7.4 Project-supplied readiness predicate
 
 Projects with cross-thread or deferred initialization that continues past `simulator_started` can supply a readiness predicate that the server polls each frame:
@@ -897,7 +910,7 @@ Gating is driven by the per-method requirement-token vocabulary (see §7.5). Con
 
 Calling a gated-out method returns `ERR_UNKNOWN_METHOD`. The protocol intentionally collapses "method not implemented" and "method gated out by configuration" into the same error: a missing capability looks identical to a never-implemented one, which is what clients should treat it as. The `gated_out` list is informational — clients that want to explain *why* a method is unavailable can read it.
 
-The manifest version is reported as `assistant_protocol_version` (currently `2`); fields are added additively across versions.
+The manifest version is reported as `assistant_protocol_version` (currently `3`); fields are added additively across versions.
 
 ### 8.2 Splash Screen Handling
 
@@ -951,7 +964,10 @@ python tools/assistant_test.py                  # game already running on port 2
 python tools/assistant_test.py --launch         # start Godot automatically, then test
 python tools/assistant_test.py --skip-save      # skip the save/load cycle
 python tools/assistant_test.py --port 29072     # custom port
+python tools/assistant_test.py --launch --headless  # no rendering; skips the hover test
 ```
+
+With `--launch`, the script starts Godot on a free port (unless `--port` is given), so several runs can go at once. The launched Godot does not outlive the script, even if the script is killed (Windows).
 
 The script is capability-aware: it checks the `capabilities` array from `get_project_info` and skips tests for features the project does not support. Exit code is 0 on success, 1 on failure.
 

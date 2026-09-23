@@ -35,7 +35,7 @@ const ERR_NOT_ALLOWED := 5
 
 ## Manifest schema version reported in [code]get_project_info[/code]. Bumped
 ## when the response schema gains or changes fields (additive changes only).
-const ASSISTANT_PROTOCOL_VERSION := 2
+const ASSISTANT_PROTOCOL_VERSION := 3
 
 ## Vocabulary of requirement tokens recognized in
 ## [method IVAssistantTestSuite.get_method_requirements]. Tokens not in this
@@ -69,6 +69,7 @@ var _tcp_server: TCPServer
 var _clients: Array[StreamPeerTCP] = []
 var _buffers: Dictionary = {} # StreamPeerTCP -> PackedByteArray
 var _port: int
+var _instance_id: String # echoed in get_project_info; lets a launcher find its own process
 var _assistant_name: String
 var _context_content: String
 var _listening := false # TCP server is active
@@ -118,6 +119,7 @@ func _ready() -> void:
 		set_process(false)
 		return
 	_port = config.get_value("assistant", "port", 29071)
+	_apply_cmdline_user_args()
 	_assistant_name = config.get_value("assistant", "assistant_name", "")
 	_min_ready_delay_frames = config.get_value("assistant", "min_ready_delay_frames", 10)
 	var context_file: String = config.get_value("assistant", "context_file", "")
@@ -394,7 +396,11 @@ func _get_project_info() -> Dictionary:
 		"capabilities": capabilities,
 		"methods": methods,
 		"gated_out": gated_out,
+		"process_id": OS.get_process_id(),
+		"port": _port,
 	}
+	if _instance_id:
+		result["instance_id"] = _instance_id
 	if _context_content:
 		result["context"] = _context_content
 	return result
@@ -593,3 +599,17 @@ func _load_context_file(path: String) -> String:
 		push_warning("IVAssistantServer: failed to open context file: %s" % path)
 		return ""
 	return file.get_as_text()
+
+
+# Command-line user args (after "--") override config, so one machine can run several
+# instances of a project at once. See SPECIFICATION.md §7.3.
+func _apply_cmdline_user_args() -> void:
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--assistant-port="):
+			var value := arg.trim_prefix("--assistant-port=")
+			if !value.is_valid_int():
+				push_error("IVAssistantServer: bad %s" % arg)
+				continue
+			_port = value.to_int()
+		elif arg.begins_with("--assistant-instance="):
+			_instance_id = arg.trim_prefix("--assistant-instance=")
