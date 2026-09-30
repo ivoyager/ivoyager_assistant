@@ -28,11 +28,14 @@ extends IVAssistantTestSuite
 ## meshes, and orbit lines, surfaced via [IVMouseTargetLabel]):[br][br]
 ##
 ## - [code]warp_mouse[/code] synthesizes an [InputEventMouseMotion] at a
-##   given viewport pixel.[br]
+##   given window pixel.[br]
 ## - [code]project_to_screen[/code] converts a body-anchored or raw
-##   world-space position into viewport pixel coordinates.[br]
+##   world-space position into window pixel coordinates.[br]
 ## - [code]get_hover_target[/code] reads the current [IVMouseTargetLabel]
 ##   text and visibility.[br][br]
+##
+## All three share one pixel space with [code]screenshot[/code]: the window's own
+## pixels, which the Core plugin's display scale makes finer than the GUI's.[br][br]
 ##
 ## [IVSmallBodiesGroup] point projection lives in
 ## [code]SmallBodiesIdSuite[/code] (see [code]small_bodies_id_suite.gd[/code])
@@ -169,8 +172,9 @@ func _project_to_screen(params: Dictionary) -> Variant:
 	var on_screen := !behind and (
 			screen.x >= 0.0 and screen.y >= 0.0
 			and screen.x <= rect_size.x and screen.y <= rect_size.y)
+	var pixel := IVAssistantTestSuite.to_window_pixels(viewport, screen)
 	return {
-		"position": [screen.x, screen.y],
+		"position": [pixel.x, pixel.y],
 		"on_screen": on_screen,
 		"behind_camera": behind,
 		"world_position_used": [world_pos.x, world_pos.y, world_pos.z],
@@ -179,7 +183,7 @@ func _project_to_screen(params: Dictionary) -> Variant:
 
 func _get_hover_target() -> Variant:
 	var viewport: Viewport = _server.get_viewport()
-	var mouse_pos: Vector2 = viewport.get_mouse_position()
+	var mouse_pos := IVAssistantTestSuite.to_window_pixels(viewport, viewport.get_mouse_position())
 	return {
 		"text": _mouse_target_label.text,
 		"visible": _mouse_target_label.visible,

@@ -10,9 +10,14 @@ File format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Under development using Godot 4.7.1.
 
 ### Added
+* Command-line arguments `--assistant-port` and `--assistant-instance` (after `--`) override the configured port and tag the process, so one machine can run several instances at once; `get_project_info` reports `process_id`, `port` and `instance_id`. `GodotLauncher` in `tools/assistant_test.py` uses them: `port=0` launches on a free port, `check_instance()` verifies a client reached its own instance, and the launched Godot dies with its script on Windows. See SPECIFICATION.md §7.3.
+* `--headless` option for `tools/assistant_test.py`, which skips the mouse-hover test.
 * `move_camera` takes a `tracking` parameter (`"ground"`, `"orbit"` or `"ecliptic"`), which decides what frame its `view_position` longitude and latitude are measured in; omitted, the camera's current mode is left alone. Without it an agent could only pose in whatever frame the session happened to be in — and the default is not body-relative, so "put the camera 20 degrees above the equator" was not expressible at all.
 * Method `set_huds` in the control suite, which sets orbit lines, names, symbols and the small-body point groups at once and absolutely. The `toggle_*` actions could not give an agent a clean frame to judge a render in: each is a toggle whose result depends on the state the session started in, so a cached view that already hides the HUDs has them *shown* by `press_action toggle_orbits`. `screenshot`'s `hide_gui` was never enough either — it hides the 2D GUI and leaves every 3D overlay drawing over the subject. The resulting flags come back in the result so a caller can confirm rather than assume.
 * Methods `list_cached_views` and `apply_cached_view` in the view suite, so an agent can reproduce a staging the user set up and saved by hand rather than hunting for it by trial and error. `apply_cached_view` takes the view's `name` and its `collection`; `list_cached_views` reports both, alongside the same decoded fields `list_views` gives for the built-in views.
+
+### Changed
+* `project_to_screen`, `project_small_body_to_screen` and `get_hover_target` report window pixels, the same pixels `warp_mouse` takes and `screenshot` captures, now that the Core plugin's display scale puts the GUI in logical pixels on a hi-DPI screen (new static `IVAssistantTestSuite.to_window_pixels()`).
 
 
 ## [v0.0.2] - 2026-08-01

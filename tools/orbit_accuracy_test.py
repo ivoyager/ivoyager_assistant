@@ -30,7 +30,7 @@ import os
 import re
 import sys
 
-from assistant_test import AssistantClient, GodotLauncher
+from assistant_test import DEFAULT_PORT, AssistantClient, GodotLauncher
 
 EPOCH_JD = 2451545.0  # J2000
 DAY_SECONDS = 86400.0
@@ -272,7 +272,9 @@ def main():
     parser = argparse.ArgumentParser(
         description="Compare sim body positions against JPL Horizons reference vectors")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=29071)
+    parser.add_argument("--port", type=int, default=None,
+                        help="Server port (default: %d, or a free port with --launch)"
+                             % DEFAULT_PORT)
     parser.add_argument("--launch", action="store_true",
                         help="Launch Godot before testing, quit it after")
     parser.add_argument("--godot", default=None, help="Path to Godot console executable")
@@ -288,14 +290,17 @@ def main():
             print("No Godot console executable found; use --godot PATH")
             sys.exit(2)
         print(f"Launching: {godot} --path {args.project}")
-        launcher = GodotLauncher(godot, args.project)
+        launcher = GodotLauncher(godot, args.project, port=args.port or 0)
         launcher.start()
 
-    client = AssistantClient(host=args.host, port=args.port)
+    port = launcher.port if launcher else args.port or DEFAULT_PORT
+    client = AssistantClient(host=args.host, port=port)
     success = False
     try:
-        print(f"Connecting to {args.host}:{args.port}...")
+        print(f"Connecting to {args.host}:{port}...")
         client.connect()
+        if launcher:
+            launcher.check_instance(client)
 
         # Sim-gated methods return error 4 until the readiness gate opens. Probe
         # list_bodies (no specific body required) until it returns a result.
